@@ -1,5 +1,3 @@
-from __future__ import print_function
-import os
 import argparse
 import torch
 from convert_to_onnx import load_model
@@ -11,7 +9,6 @@ from models.retinaface import RetinaFace
 import torch.nn as nn
 import torchvision
 import onnxruntime as rt
-import matplotlib.pyplot as plt
 
 
 def decode_landm_torch(pre, priors, variances):
@@ -59,8 +56,21 @@ def decode_torch(loc, priors, variances):
     return boxes
 
 
+def bounding_box_from_points_torch(points, point_shape, scale_factor=(1, 1)):
+    points = points.reshape((-1,) + point_shape)
+    x1y1, _ = points.min(1)
+    x2y2, _ = points.max(1)
+    x1y1x2y2 = torch.cat([x1y1, x2y2], 1)
+    if (scale_factor[0] != 1) or (scale_factor[1] != 1): 
+        x1y1x2y2 = x1y1x2y2.reshape(-1, 2, 2)
+        _mean = x1y1x2y2.mean(1, keepdims=True)
+        x1y1x2y2 = (x1y1x2y2 - _mean)*torch.Tensor(scale_factor).view(-1, 1, 2)
+        x1y1x2y2 = (x1y1x2y2 + _mean).view(-1, 4)
+    return x1y1x2y2
+
+
 class RetinaStaticExportWrapper(nn.Module):
-    def __init__(self, model, prior_box, config):
+    def __init__(self, model, prior_box, config, bounding_box_from_points):
         super(RetinaStaticExportWrapper, self).__init__()
         self.model = model
         self.color_scheme = config.get('color_scheme', 'BGR')
@@ -91,6 +101,7 @@ class RetinaStaticExportWrapper(nn.Module):
             self.std = self.std[None, :, None, None]
 
         self.prior_box = prior_box
+        self.bounding_box_from_points = bounding_box_from_points
 
     def forward(self, x):
         prior_box = self.prior_box
@@ -104,53 +115,72 @@ class RetinaStaticExportWrapper(nn.Module):
         if self.normalize:
             x = ((x - self.mean) / self.std)
 
-        loc, conf, landms = self.model(x)
+        if self.bounding_box_from_points:
+            _, conf, landms = self.model(x)
+        else:
+            loc, conf, landms = self.model(x)
 
         size_b, size_c, size_y, size_x = x.size()
         size_p, size_o = prior_box.size()
         coordinate_scale = torch.tensor([size_x, size_y]).view(1, 2)
 
-        loc = decode_torch(loc, prior_box, self.variance)
-        loc = loc.reshape((size_b, size_p) + (2, 2)) * coordinate_scale
-        loc = loc.reshape(size_b, size_p, 4)
-
         landms = decode_landm_torch(landms, prior_box, self.variance)
         landms = landms.reshape((size_b, size_p) + self.point_shape) * coordinate_scale
         landms = landms.reshape(size_b, size_p, self.point_count)
 
+        if self.bounding_box_from_points:
+            pass
+        else:
+            loc = decode_torch(loc, prior_box, self.variance)
+            loc = loc.reshape((size_b, size_p) + (2, 2)) * coordinate_scale
+            loc = loc.reshape(size_b, size_p, 4)
+
         score = conf[..., 1]
         confidence_select = score > self.confidence_threshold
-        loc = loc[confidence_select]
         landms = landms[confidence_select]
         score = score[confidence_select]
 
-        _, top_k_select = score.sort(descending=True)  # NOT supported in ONNX opset 11  torch.argsort(score, descending=True)[:self.top_k]
+        if self.bounding_box_from_points:
+            pass
+        else:
+            loc = loc[confidence_select]
+
+        # NOT supported in ONNX opset 11  torch.argsort(score, descending=True)[:self.top_k]
+        _, top_k_select = score.sort(descending=True)
         top_k_select = top_k_select[:self.top_k]
-        loc = loc[top_k_select]
         landms = landms[top_k_select]
         score = score[top_k_select]
+
+        if self.bounding_box_from_points:
+            loc = bounding_box_from_points_torch(landms, self.point_shape)
+        else:
+            loc = loc[top_k_select]
 
         nms_select = torchvision.ops.nms(loc, score, self.nms_threshold)
         loc = loc[nms_select]
         landms = landms[nms_select]
         score = score[nms_select]
 
-        return score, loc, landms
+        return score, landms, loc
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Test')
     parser.add_argument('--network', default='mobile0.25', help='Backbone network mobile0.25 or resnet50')
-    parser.add_argument('--long_side', default=640, help='when origin_size is false, long_side is scaled size(320 or 640 for long side)')
+    parser.add_argument('--long_side', default=640, 
+                        help='when origin_size is false, long_side is scaled size(320 or 640 for long side)')
     parser.add_argument('--cpu', action="store_true", default=True, help='Use cpu inference')
-    parser.add_argument('--test_image_path', action="store_true", default='./curve/ATC_2011_Graduation_Ceremony.jpg', help='Path to test image')
-    parser.add_argument('--bounding_box_from_points', action="store_true", default=True, help='Construct bounding box from points')
+    parser.add_argument('--test_image_path', action="store_true",
+                        default='./curve/ATC_2011_Graduation_Ceremony.jpg', help='Path to test image')
+    parser.add_argument('--bounding_box_from_points', action="store_true",
+                        default=True, help='Construct bounding box from points')
     parser.add_argument('--vis_thres', default=0.6, type=float, help='visualization_threshold')
     args = parser.parse_args()
 
     test_image_path = args.test_image_path
     long_side = args.long_side
     vis_thres = args.vis_thres
+    bounding_box_from_points = args.bounding_box_from_points
     torch.set_grad_enabled(False)
     cfg = None
     if args.network == "mobile0.25":
@@ -159,8 +189,9 @@ if __name__ == '__main__':
     elif args.network == "resnet50":
         cfg = cfg_re50
         trained_model = './weights/Resnet50_Final.pth'
+
     # net and model
-    net = RetinaFace(cfg=cfg, phase = 'test')
+    net = RetinaFace(cfg=cfg, phase='test')
     net = load_model(net, trained_model, args.cpu)
     net.eval()
     print('Finished loading model!')
@@ -174,8 +205,8 @@ if __name__ == '__main__':
     img_show = img_raw.copy()
     f_xy = (np.array(img_raw.shape) / long_side).max()
     img_raw_in = cv2.resize(img_raw, None, fx=1. / f_xy, fy=1. / f_xy)
-    img_raw_in = cv2.copyMakeBorder(img_raw_in, 0, long_side-img_raw_in.shape[0], 
-                                    0, long_side - img_raw_in.shape[1], 
+    img_raw_in = cv2.copyMakeBorder(img_raw_in, 0, long_side-img_raw_in.shape[0],
+                                    0, long_side - img_raw_in.shape[1],
                                     cv2.BORDER_CONSTANT)
 
     priorbox = PriorBox(cfg, image_size=(long_side, long_side))
@@ -184,12 +215,12 @@ if __name__ == '__main__':
 
     export_config = {key: cfg[key] for key in ['variance']}
     export_config['nms_threshold'] = 0.35
-    export_config['confidence_threshold'] = 0.001
-    export_config['top_k'] = 1024
+    export_config['confidence_threshold'] = 0.02
+    export_config['top_k'] = 512
     export_config['color_scheme'] = 'BGR'
     export_config['mean'] = (104, 117, 123)
 
-    export_model = RetinaStaticExportWrapper(net, priors, export_config)
+    export_model = RetinaStaticExportWrapper(net, priors, export_config, bounding_box_from_points)
 
     input_numpy = img_raw_in[None, ...]
     input_torch = torch.from_numpy(input_numpy)
@@ -198,16 +229,14 @@ if __name__ == '__main__':
     predict_wrapper = export_model(input_torch)
 
     torch.onnx.export(export_model, input_torch, output_onnx, export_params=True, verbose=False,
-                                  input_names=['input'],
-                                  output_names=['output'],
-                                  opset_version=11)
+                      input_names=['input'], output_names=['output'], opset_version=11)
 
     model_onnx = sess = rt.InferenceSession(output_onnx, providers=['CPUExecutionProvider'])
     input_name = sess.get_inputs()[0].name
 
     predict_onnx = model_onnx.run(None, {input_name: input_numpy})
 
-    for _score, _box, _landm in zip(*(item for item in predict_onnx)):
+    for _score, _landm, _box in zip(*(item for item in predict_onnx)):
         if _score < vis_thres:
             continue
         text = "{:.4f}".format(_score)
@@ -227,16 +256,3 @@ if __name__ == '__main__':
         cv2.circle(img_show, (_landm[8], _landm[9]), 1, (255, 0, 0), 4)
 
     cv2.imwrite('onnx_original.png', img_show)
-
-
-    # # ------------------------ export -----------------------------
-    # output_onnx = 'FaceDetector.onnx'
-    # print("==> Exporting model to ONNX format at '{}'".format(output_onnx))
-    # input_names = ["input0"]
-    # output_names = ["output0"]
-    # inputs = torch.randn(1, 3, args.long_side, args.long_side).to(device)
-    #
-    # torch_out = torch.onnx._export(net, inputs, output_onnx, export_params=True, verbose=False,
-    #                                input_names=input_names, output_names=output_names)
-
-
