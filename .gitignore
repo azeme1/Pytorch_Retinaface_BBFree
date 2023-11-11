@@ -4,3 +4,5 @@ __pycache__/
 *.onnx
 *.tar
 *.pth
+# Skip VS Studio launch.json
+launch.json

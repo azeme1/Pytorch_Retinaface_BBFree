@@ -328,3 +328,14 @@ def nms(boxes, scores, overlap=0.5, top_k=200):
     return keep, count
 
 
+def bounding_box_from_points_torch(points, point_shape, scale_factor=(1, 1)):
+    points = points.reshape((-1,) + point_shape)
+    x1y1, _ = points.min(1)
+    x2y2, _ = points.max(1)
+    x1y1x2y2 = torch.cat([x1y1, x2y2], 1)
+    if (scale_factor[0] != 1) or (scale_factor[1] != 1):
+        x1y1x2y2 = x1y1x2y2.reshape(-1, 2, 2)
+        _mean = x1y1x2y2.mean(1, keepdims=True)
+        x1y1x2y2 = (x1y1x2y2 - _mean)*torch.Tensor(scale_factor).view(-1, 1, 2)
+        x1y1x2y2 = (x1y1x2y2 + _mean).view(-1, 4)
+    return x1y1x2y2

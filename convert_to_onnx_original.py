@@ -5,10 +5,13 @@ import numpy as np
 from data import cfg_mnet, cfg_re50
 from layers.functions.prior_box import PriorBox
 import cv2
+import os
 from models.retinaface import RetinaFace
 import torch.nn as nn
 import torchvision
 import onnxruntime as rt
+
+from utils.box_utils import bounding_box_from_points_torch
 
 
 def decode_landm_torch(pre, priors, variances):
@@ -54,19 +57,6 @@ def decode_torch(loc, priors, variances):
     boxes[..., :2] -= boxes[..., 2:] / 2
     boxes[..., 2:] += boxes[..., :2]
     return boxes
-
-
-def bounding_box_from_points_torch(points, point_shape, scale_factor=(1, 1)):
-    points = points.reshape((-1,) + point_shape)
-    x1y1, _ = points.min(1)
-    x2y2, _ = points.max(1)
-    x1y1x2y2 = torch.cat([x1y1, x2y2], 1)
-    if (scale_factor[0] != 1) or (scale_factor[1] != 1): 
-        x1y1x2y2 = x1y1x2y2.reshape(-1, 2, 2)
-        _mean = x1y1x2y2.mean(1, keepdims=True)
-        x1y1x2y2 = (x1y1x2y2 - _mean)*torch.Tensor(scale_factor).view(-1, 1, 2)
-        x1y1x2y2 = (x1y1x2y2 + _mean).view(-1, 4)
-    return x1y1x2y2
 
 
 class RetinaStaticExportWrapper(nn.Module):
@@ -170,8 +160,10 @@ if __name__ == '__main__':
     parser.add_argument('--long_side', default=640, 
                         help='when origin_size is false, long_side is scaled size(320 or 640 for long side)')
     parser.add_argument('--cpu', action="store_true", default=True, help='Use cpu inference')
-    parser.add_argument('--test_image_path', action="store_true",
+    parser.add_argument('--test_image_path', 
                         default='./curve/ATC_2011_Graduation_Ceremony.jpg', help='Path to test image')
+    parser.add_argument('--result_folder', action="store_true",
+                        default='./__result', help='Folder to save the debug data')
     parser.add_argument('--bounding_box_from_points', action="store_true",
                         default=True, help='Construct bounding box from points')
     parser.add_argument('--vis_thres', default=0.6, type=float, help='visualization_threshold')
@@ -180,6 +172,7 @@ if __name__ == '__main__':
     test_image_path = args.test_image_path
     long_side = args.long_side
     vis_thres = args.vis_thres
+    result_folder = args.result_folder
     bounding_box_from_points = args.bounding_box_from_points
     torch.set_grad_enabled(False)
     cfg = None
@@ -199,7 +192,7 @@ if __name__ == '__main__':
     device = torch.device("cpu" if args.cpu else "cuda")
     net = net.to(device)
 
-    output_onnx = args.network + '.onnx'
+    onnx_model_path = os.path.join(test_image_path, '', args.network + '.onnx')
 
     img_raw = cv2.imread(test_image_path)
     img_show = img_raw.copy()
@@ -224,14 +217,13 @@ if __name__ == '__main__':
 
     input_numpy = img_raw_in[None, ...]
     input_torch = torch.from_numpy(input_numpy)
-    # prior_numpy = priors.detach().numpy()
 
     predict_wrapper = export_model(input_torch)
-
-    torch.onnx.export(export_model, input_torch, output_onnx, export_params=True, verbose=False,
+    os.makedirs(os.path.dirname(onnx_model_path), exist_ok=True)
+    torch.onnx.export(export_model, input_torch, onnx_model_path, export_params=True, verbose=False,
                       input_names=['input'], output_names=['output'], opset_version=11)
 
-    model_onnx = sess = rt.InferenceSession(output_onnx, providers=['CPUExecutionProvider'])
+    model_onnx = sess = rt.InferenceSession(onnx_model_path, providers=['CPUExecutionProvider'])
     input_name = sess.get_inputs()[0].name
 
     predict_onnx = model_onnx.run(None, {input_name: input_numpy})
@@ -255,4 +247,10 @@ if __name__ == '__main__':
         cv2.circle(img_show, (_landm[6], _landm[7]), 1, (0, 255, 0), 4)
         cv2.circle(img_show, (_landm[8], _landm[9]), 1, (255, 0, 0), 4)
 
-    cv2.imwrite('onnx_original.png', img_show)
+    if bounding_box_from_points:
+        out_file_path = os.path.join(result_folder, '', 'onnx_bounding_box_from_points.png')
+    else:
+        out_file_path = os.path.join(result_folder, '', 'onnx_original.png')
+
+    os.makedirs(os.path.dirname(out_file_path), exist_ok=True)
+    cv2.imwrite(out_file_path, img_show)
