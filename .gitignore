@@ -6,3 +6,5 @@ __pycache__/
 *.pth
 # Skip VS Studio launch.json
 launch.json
+# Skip jupyter checkpoints
+*.ipynb_checkpoints
