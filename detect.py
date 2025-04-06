@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os
+from glob import glob
 import argparse
 import torch
 import torch.backends.cudnn as cudnn
@@ -8,15 +9,15 @@ from data import cfg_mnet, cfg_re50
 from layers.functions.prior_box import PriorBox
 from utils.nms.py_cpu_nms import py_cpu_nms
 import cv2
-from models.retinaface import RetinaFace
+from models.retinaface import RetinaFace, UNetRetinaConcat
 from utils.box_utils import decode, decode_landm
 import time
 
 parser = argparse.ArgumentParser(description='Retinaface')
 
-parser.add_argument('-m', '--trained_model', default='./weights/Resnet50_Final.pth',
+parser.add_argument('-m', '--trained_model', default='./weights/groupe/mobilenet0.25_epoch_35_mAP0.92347_F1_0.94949.pth',
                     type=str, help='Trained state_dict file path to open')
-parser.add_argument('--network', default='resnet50', help='Backbone network mobile0.25 or resnet50')
+parser.add_argument('--network', default='mobile0.25', help='Backbone network mobile0.25 or resnet50')
 parser.add_argument('--cpu', action="store_true", default=False, help='Use cpu inference')
 parser.add_argument('--confidence_threshold', default=0.02, type=float, help='confidence_threshold')
 parser.add_argument('--top_k', default=5000, type=int, help='top_k')
@@ -70,22 +71,36 @@ if __name__ == '__main__':
         cfg = cfg_mnet
     elif args.network == "resnet50":
         cfg = cfg_re50
+    
+    cfg['pretrain'] = False
+
+
     # net and model
-    net = RetinaFace(cfg=cfg, phase = 'test')
-    net = load_model(net, args.trained_model, args.cpu)
+    # net = RetinaFace(cfg=cfg, phase = 'test')
+    net = UNetRetinaConcat(cfg=cfg, phase = 'test')
+    # net = load_model(net, args.trained_model, args.cpu)
+    net.load_state_dict(torch.load(args.trained_model, map_location='cpu'))
     net.eval()
     print('Finished loading model!')
     print(net)
     cudnn.benchmark = True
     device = torch.device("cpu" if args.cpu else "cuda")
+    device = 'cpu'
     net = net.to(device)
 
     resize = 1
 
+    import imageio
+
+    writer = imageio.get_writer(f'{os.path.basename(args.trained_model)}.mov', fps=1)
+
     # testing begin
-    for i in range(100):
-        image_path = "./curve/test.jpg"
+    image_path_list = glob("./curve/test_*.jpg")
+    image_path_list = glob("/home/ubuntu/projects/dataset/cvat_year/task_to_cvat_year_parsing_th50_dataset_2025_02_15_23_02_04_labelme 3.0/default/*.jpg")
+    for image_path in image_path_list:
         img_raw = cv2.imread(image_path, cv2.IMREAD_COLOR)
+        img_raw = cv2.resize(img_raw, (640, 640))
+        # img_raw = np.ascontiguousarray(np.transpose(img_raw, (1, 0, 2))[::-1, ...])
 
         img = np.float32(img_raw)
 
@@ -98,7 +113,7 @@ if __name__ == '__main__':
         scale = scale.to(device)
 
         tic = time.time()
-        loc, conf, landms = net(img)  # forward pass
+        (loc, conf, landms), _ = net(img)  # forward pass
         print('net forward time: {:.4f}'.format(time.time() - tic))
 
         priorbox = PriorBox(cfg, image_size=(im_height, im_width))
@@ -163,6 +178,8 @@ if __name__ == '__main__':
                 cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
             # save image
 
-            name = "test.jpg"
-            cv2.imwrite(name, img_raw)
+            name = os.path.basename(image_path)
+            # cv2.imwrite(name, img_raw)
+            writer.append_data(cv2.resize(img_raw[..., ::-1], (1024, 1024)))
 
+    writer.close()

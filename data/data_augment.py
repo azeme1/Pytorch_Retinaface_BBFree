@@ -2,9 +2,12 @@ import cv2
 import numpy as np
 import random
 from utils.box_utils import matrix_iof
+import albumentations as A
+
+PRE_SCALES = [0.3, 0.45, 0.6, 0.8, 1.0]
 
 
-def _crop(image, boxes, labels, landm, img_dim):
+def _crop(image, boxes, labels, landm, img_dim, pre_scales):
     height, width, _ = image.shape
     pad_image_flag = True
 
@@ -15,8 +18,8 @@ def _crop(image, boxes, labels, landm, img_dim):
         else:
             scale = random.uniform(0.3, 1.0)
         """
-        PRE_SCALES = [0.3, 0.45, 0.6, 0.8, 1.0]
-        scale = random.choice(PRE_SCALES)
+
+        scale = random.choice(pre_scales)
         short_side = min(width, height)
         w = int(scale * short_side)
         h = w
@@ -208,9 +211,11 @@ def _resize_subtract_mean(image, insize, rgb_mean):
 
 class preproc(object):
 
-    def __init__(self, img_dim, rgb_means):
+    def __init__(self, img_dim, rgb_means, use_mirror=True, pre_scales=PRE_SCALES):
         self.img_dim = img_dim
         self.rgb_means = rgb_means
+        self.use_mirror = use_mirror
+        self.pre_scales = pre_scales
 
     def __call__(self, image, targets):
         assert targets.shape[0] > 0, "this image does not have gt"
@@ -219,10 +224,16 @@ class preproc(object):
         labels = targets[:, -1].copy()
         landm = targets[:, 4:-1].copy()
 
-        image_t, boxes_t, labels_t, landm_t, pad_image_flag = _crop(image, boxes, labels, landm, self.img_dim)
+        image_t, boxes_t, labels_t, landm_t, pad_image_flag = \
+            _crop(image, boxes, labels, landm, self.img_dim, pre_scales=self.pre_scales)
         image_t = _distort(image_t)
-        image_t = _pad_to_square(image_t,self.rgb_means, pad_image_flag)
-        image_t, boxes_t, landm_t = _mirror(image_t, boxes_t, landm_t)
+        image_t = _pad_to_square(image_t, self.rgb_means, pad_image_flag)
+
+        if self.use_mirror:
+            image_t, boxes_t, landm_t = _mirror(image_t, boxes_t, landm_t)
+        else:
+            image_t, boxes_t, landm_t = image_t, boxes_t, landm_t
+
         height, width, _ = image_t.shape
         image_t = _resize_subtract_mean(image_t, self.img_dim, self.rgb_means)
         boxes_t[:, 0::2] /= width
@@ -235,3 +246,86 @@ class preproc(object):
         targets_t = np.hstack((boxes_t, landm_t, labels_t))
 
         return image_t, targets_t
+
+
+class preproc_a(object):
+
+    def __init__(self, img_dim, rgb_means, use_mirror=True, pre_scales=PRE_SCALES, transform=None):
+        self.img_dim = img_dim
+        self.rgb_means = rgb_means
+        self.use_mirror = use_mirror
+        self.pre_scales = pre_scales
+        self.transform = transform
+
+    def __call__(self, image, targets):
+        assert targets.shape[0] > 0, "this image does not have gt"
+
+        boxes = targets[:, :4].copy()
+        labels = targets[:, -1].copy()
+        landm = targets[:, 4:-1].copy()
+
+        image_t, boxes_t, labels_t, landm_t, pad_image_flag = \
+            _crop(image, boxes, labels, landm, self.img_dim, pre_scales=self.pre_scales)
+        # image_t = _distort(image_t)
+        image_t = _pad_to_square(image_t, self.rgb_means, pad_image_flag)
+
+        if self.use_mirror:
+            image_t, boxes_t, landm_t = _mirror(image_t, boxes_t, landm_t)
+        else:
+            image_t, boxes_t, landm_t = image_t, boxes_t, landm_t
+
+        height, width, _ = image_t.shape
+
+        keypoints = [tuple(item) for item in landm_t.reshape(-1, 2)]
+        bboxes = [item.tolist() for item in boxes_t.reshape(-1, 4)]
+
+        if self.transform is None:
+            image_t = image
+        else:
+            try:
+                transformed = self.transform(image=image, bboxes=bboxes, keypoints=keypoints, class_labels=['any_name'] * len(bboxes))
+                image_t = transformed['image']
+                bboxes = transformed['bboxes']
+                keypoints = transformed['keypoints']
+            except Exception:
+                pass
+
+        try:
+            boxes_t = np.array(bboxes).astype(boxes_t.dtype).reshape(boxes_t.shape)
+            landm_t = np.array(keypoints).astype(landm_t.dtype).reshape(landm_t.shape)
+        except Exception:
+            pass
+
+        # boxes_t = [item.reshape((-1, 2)).min(0).tolist() + item.reshape((-1, 2)).max(0).tolist() for item in landm_t]
+        boxes_t = np.array(boxes_t)
+
+        # landm_t[...] = 0.
+
+        image_t = _resize_subtract_mean(image_t, self.img_dim, self.rgb_means)
+
+        boxes_t[:, 0::2] /= width
+        boxes_t[:, 1::2] /= height
+
+        landm_t[:, 0::2] /= width
+        landm_t[:, 1::2] /= height
+
+        labels_t = np.expand_dims(labels_t, 1)
+        targets_t = np.hstack((boxes_t, landm_t, labels_t))
+
+        # Create masks
+        landm_t_original = landm_t.copy().reshape(len(landm_t), -1, 2)
+        landm_t_original = np.delete(landm_t_original, (2), axis=1)
+        landm_t_original[..., 0::2] *= self.img_dim
+        landm_t_original[..., 1::2] *= self.img_dim
+        landm_t_original = landm_t_original.astype(np.int32)
+
+        mask_t = np.zeros((self.img_dim, self.img_dim), dtype=np.uint8)
+        color_innner = (1, )
+        cv2.fillPoly(mask_t, pts=landm_t_original, color=color_innner)
+
+        isClosed = True
+        color_border = (2, )
+        thickness = 6
+        mask_t = cv2.polylines(mask_t, landm_t_original, isClosed, color_border, thickness)
+
+        return image_t, mask_t[None, ...], targets_t

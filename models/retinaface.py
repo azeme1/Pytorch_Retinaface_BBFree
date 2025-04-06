@@ -8,6 +8,7 @@ from collections import OrderedDict
 from models.net import MobileNetV1 as MobileNetV1
 from models.net import FPN as FPN
 from models.net import SSH as SSH
+from models.unet import UNet_X1
 
 
 
@@ -128,3 +129,31 @@ class RetinaFace(nn.Module):
         else:
             output = (bbox_regressions, F.softmax(classifications, dim=-1), ldm_regressions)
         return output
+
+
+class UNetRetina(RetinaFace):
+    def __init__(self, cfg=None, phase='train'):
+        super().__init__(cfg, phase)
+        self.unet = UNet_X1(3, 1)
+        self.dropout2d = torch.nn.Dropout2d(p=0.5)
+
+    def forward(self, x):
+        y = self.unet(x)
+        x = self.dropout2d(x)
+        y = super().forward(torch.sigmoid(y) * x)
+        return y
+
+
+class UNetRetinaConcat(RetinaFace):
+    def __init__(self, cfg=None, phase='train'):
+        super().__init__(cfg, phase)
+        self.unet = UNet_X1(3, 3)
+        self.body.stage1[0][0] = torch.nn.Conv2d(6, 8, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        self.dropout2d = torch.nn.Dropout2d(p=0.005)
+
+    def forward(self, x):
+        y = self.unet(x)
+        x = self.dropout2d(x)
+        x = super().forward(torch.cat([x, torch.softmax(y, dim=1)], dim=1))
+        # x = super().forward(torch.sigmoid(torch.mean(y, 1, keepdim=True)) * x)
+        return x, y

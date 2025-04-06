@@ -49,13 +49,16 @@ def decode_torch(loc, priors, variances):
     """
     _p = priors.unsqueeze(0)
 
-    #     print(loc.shape, _p.shape)
-
     boxes = torch.cat((
         _p[..., :2] + loc[..., :2] * variances[0] * _p[..., 2:],
         _p[..., 2:] * torch.exp(loc[..., 2:] * variances[1])), 2)
-    boxes[..., :2] -= boxes[..., 2:] / 2
-    boxes[..., 2:] += boxes[..., :2]
+
+    # boxes[..., :2] = boxes[..., :2] - boxes[..., 2:] / 2
+    # boxes[..., 2:] = boxes[..., 2:] + boxes[..., :2]
+
+    boxes = torch.cat([boxes[..., :2] - boxes[..., 2:] / 2,
+                       boxes[..., :2] + boxes[..., 2:] / 2], dim=2)
+
     return boxes
 
 
@@ -90,6 +93,9 @@ class RetinaStaticExportWrapper(nn.Module):
             self.mean = self.mean[None, :, None, None]
             self.std = self.std[None, :, None, None]
 
+            self.mean = torch.nn.Parameter(self.mean, requires_grad=False)
+            self.std = torch.nn.Parameter(self.std, requires_grad=False)
+
         self.prior_box = prior_box
         self.bounding_box_from_points = bounding_box_from_points
 
@@ -108,11 +114,11 @@ class RetinaStaticExportWrapper(nn.Module):
         if self.bounding_box_from_points:
             _, conf, landms = self.model(x)
         else:
-            loc, conf, landms = self.model(x)
+            (loc, conf, landms), _ = self.model(x)
 
         size_b, size_c, size_y, size_x = x.size()
         size_p, size_o = prior_box.size()
-        coordinate_scale = torch.tensor([size_x, size_y]).view(1, 2)
+        coordinate_scale = torch.tensor([size_x, size_y]).view(1, 2).to(x.device)
 
         landms = decode_landm_torch(landms, prior_box, self.variance)
         landms = landms.reshape((size_b, size_p) + self.point_shape) * coordinate_scale
