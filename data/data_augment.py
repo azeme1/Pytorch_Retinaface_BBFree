@@ -326,6 +326,7 @@ class preproc_a(object):
         isClosed = True
         color_border = (2, )
         thickness = 6
+        thickness = 16
         mask_t = cv2.polylines(mask_t, landm_t_original, isClosed, color_border, thickness)
 
         return image_t, mask_t[None, ...], targets_t

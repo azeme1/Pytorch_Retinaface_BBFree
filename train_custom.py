@@ -130,7 +130,7 @@ def compute_metrics(detections, annotations, iou_threshold=0.5):
         detected = [False] * len(det)
         true_positive = 0
         false_positive = 0
-        false_negative = len(ann)z
+        false_negative = len(ann)
 
         for a in ann:
             matched = False
@@ -209,7 +209,13 @@ def train():
     elif args.network == "resnet50":
         cfg = cfg_re50
 
-    rgb_mean = (104, 117, 123) # bgr order
+    use_batch_normalization = True
+
+    if use_batch_normalization:
+        rgb_mean = (0, 0, 0)
+    else:
+        rgb_mean = (104, 117, 123) # bgr order
+
     num_classes = 2
     img_dim = cfg['image_size']
     num_gpu = cfg['ngpu']
@@ -260,7 +266,7 @@ def train():
     cfg['pretrain'] = False
     max_epoch = 2048
 
-    model = UNetRetinaConcat(cfg=cfg)
+    model = UNetRetinaConcat(cfg=cfg, use_batch_normalization=use_batch_normalization)
     print("Printing net...")
     print(model)
 
@@ -293,7 +299,7 @@ def train():
     export_config['confidence_threshold'] = 0.02
     export_config['top_k'] = 512
     export_config['color_scheme'] = 'BGR'
-    export_config['mean'] = (104, 117, 123)
+    export_config['mean'] = rgb_mean
     bounding_box_from_points = False
 
     cudnn.benchmark = True
@@ -304,7 +310,7 @@ def train():
 
     criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 7, 0.35, False)
     criterion_unet_j = JaccardLoss(mode='multiclass', from_logits=True, smooth=32)
-    criterion_unet_2 = torch.nn.CrossEntropyLoss()
+    criterion_unet_b = torch.nn.CrossEntropyLoss()
 
     priorbox = PriorBox(cfg, image_size=(img_dim, img_dim))
     with torch.no_grad():
@@ -409,7 +415,9 @@ def train():
         # backprop
         optimizer.zero_grad()
         loss_l, loss_c, loss_landm = criterion(out, priors, targets)
-        loss_j = criterion_unet_j(mask_predicted, mask_true[:, 0, ...].long()) + criterion_unet_j(mask_predicted[:, 1:, ...], torch.clamp(mask_true.long() - 1, 0, 1))
+        # loss_j = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long()) + criterion_unet_j(mask_predicted[:, 1:, ...], torch.clamp(mask_true.long() - 1, 0, 1))
+        loss_j = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long()) + \
+            criterion_unet_j(mask_predicted, mask_true.long())
         loss = cfg['loc_weight'] * loss_l + loss_c + loss_landm + loss_j
         loss.backward()
         optimizer.step()
@@ -421,7 +429,8 @@ def train():
 
         if iteration % epoch_size == 0:
             item_count = 4
-            frame_data = np.transpose(images[0:item_count].detach().cpu().numpy(), (0, 2, 3, 1)) * 255 / (images.max() - images.min()).item()
+            # frame_data = np.transpose(images[0:item_count].detach().cpu().numpy(), (0, 2, 3, 1)) * 255 / (images.max() - images.min()).item()
+            frame_data = (np.transpose(images[0:item_count].detach().cpu().numpy(), (0, 2, 3, 1)))
             mask_true_data = 255 * torch.nn.functional.one_hot(mask_true[0:item_count, 0].long().detach()).cpu().numpy()
             mask_predicted_data = 255 * np.transpose(mask_predicted[0:item_count].detach().cpu().numpy(), (0, 2, 3, 1))
 

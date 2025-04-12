@@ -145,15 +145,20 @@ class UNetRetina(RetinaFace):
 
 
 class UNetRetinaConcat(RetinaFace):
-    def __init__(self, cfg=None, phase='train'):
+    def __init__(self, cfg=None, phase='train', use_batch_normalization=False):
         super().__init__(cfg, phase)
         self.unet = UNet_X1(3, 3)
         self.body.stage1[0][0] = torch.nn.Conv2d(6, 8, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
-        self.dropout2d = torch.nn.Dropout2d(p=0.005)
+        self.dropout2d = torch.nn.Dropout2d(p=0.15)
+        self.use_batch_normalization = use_batch_normalization
+        self.batch_normalization = torch.nn.BatchNorm2d(3, momentum=0.01)
 
     def forward(self, x):
+        if self.use_batch_normalization:
+            x = self.batch_normalization(x)
         y = self.unet(x)
+        x = torch.cat([x, torch.softmax(y, dim=1)], dim=1)
         x = self.dropout2d(x)
-        x = super().forward(torch.cat([x, torch.softmax(y, dim=1)], dim=1))
+        x = super().forward(x)
         # x = super().forward(torch.sigmoid(torch.mean(y, 1, keepdim=True)) * x)
         return x, y
