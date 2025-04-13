@@ -93,7 +93,7 @@ class MultiBoxLoss(nn.Module):
         loss_landm = F.smooth_l1_loss(landm_p, landm_t, reduction='sum')
 
         pos = conf_t != zeros
-        conf_t[pos] = 1
+        # conf_t[pos] = 1
 
         # Localization Loss (Smooth L1)
         # Shape: [batch,num_priors,4]
@@ -121,6 +121,9 @@ class MultiBoxLoss(nn.Module):
         conf_p = conf_data[(pos_idx + neg_idx).gt(0)].view(-1, self.num_classes)
         targets_weighted = conf_t[(pos + neg).gt(0)]
         loss_c = F.cross_entropy(conf_p, targets_weighted, reduction='sum')
+        # _, w = torch.unique(targets_weighted, return_counts=True)
+        # w = 1 / (1 + w) 
+        # loss_c = (loss_c * w).sum() / w.sum()
 
         # Sum of losses: L(x,c,l,g) = (Lconf(x, c) + αLloc(x,l,g)) / N
         N = max(num_pos.data.sum().float(), 1)

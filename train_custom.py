@@ -157,21 +157,63 @@ def compute_metrics(detections, annotations, iou_threshold=0.5):
     return precision_avg, recall_avg, f1_score_avg
 
 
-def validation_epoch(model, dataloader, device):
+def validation_epoch(model, dataloader, device, visualiation_count=4):
     model.eval()
     torch.enable_grad(False)
+
+    visualiation_frame_show_list = []
 
     annotations = []
     detections = []
     for item_batch in dataloader:
         for item in zip(*tuple(item_batch)):
-            frame_data, mask_data, ground_truth = item
+            frame_data, mask_ground_truth, ground_truth = item
             ground_truth[:, :-1] = (ground_truth[:, :-1].reshape(ground_truth.shape[0], -1, 2) * \
                                     torch.tensor(frame_data.shape[1:][::-1])).reshape(ground_truth[:, :-1].shape)
             output = model(torch.permute(frame_data[None, ...], (0, 2, 3, 1)).to(device))
-            confidence, landmarks, bbox = [item.detach().cpu().numpy() for item in output]
+            confidence_list, landmark_list, bbox_lsit, mask_predicted = \
+                [item.detach().cpu().numpy() for item in output]
             annotations.append(ground_truth[:, :4].detach().cpu().numpy())
-            detections.append(bbox)
+            detections.append(bbox_lsit)
+
+            if len(visualiation_frame_show_list) < visualiation_count:
+                frame_data = torch.permute(frame_data, (1, 2, 0)).contiguous().detach().byte().cpu().numpy()
+                mask_ground_truth = (255 * torch.nn.functional.one_hot(mask_ground_truth.long()))[0].detach().cpu().numpy()
+                mask_predicted = (255 * np.transpose(mask_predicted, (0, 2, 3, 1))[0]).astype(np.uint8)
+
+                for confidence, box, landmark in zip(confidence_list, bbox_lsit, landmark_list):
+                    label_index = int(confidence.argmax().item())
+                    label_confidence = confidence[label_index].item()
+                    label_show = int(max(label_index - 1, 0))
+
+                    _box = list(map(int, box + 0.5))
+                    _landm = list(map(int, landmark + 0.5))
+                    cv2.rectangle(frame_data, (_box[0], _box[1]), (_box[2], _box[3]), (0, 0, 255), 2)
+
+                    cx = _box[0]
+                    cy = _box[1] + 12
+                    text = f"{label_confidence:.4f}"
+                    cv2.putText(frame_data, text, (cx, cy),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.75, (255, 255, 0), thickness=2)
+
+                    cx = _box[0]
+                    cy = _box[1] + 48
+                    text = f"[{label_show}]"
+                    cv2.putText(frame_data, text, (cx, cy),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.75, (196, 196, 0), thickness=2)
+
+                    # landms
+                    cv2.circle(frame_data, (_landm[0], _landm[1]), 1, (0, 0, 255), 4)
+                    cv2.circle(frame_data, (_landm[2], _landm[3]), 1, (0, 255, 255), 4)
+                    cv2.circle(frame_data, (_landm[4], _landm[5]), 1, (255, 0, 255), 4)
+                    cv2.circle(frame_data, (_landm[6], _landm[7]), 1, (0, 255, 0), 4)
+                    cv2.circle(frame_data, (_landm[8], _landm[9]), 1, (255, 0, 0), 4)
+
+                frame_show = np.vstack([frame_data, mask_ground_truth, mask_predicted])
+                visualiation_frame_show_list.append(frame_show)
+
+    frame_show = np.hstack(visualiation_frame_show_list)
+    cv2.imwrite('frame_show_validation.jpg', frame_show)
 
     # Calculate mAP
     mAP = compute_map(detections, annotations)
@@ -209,14 +251,15 @@ def train():
     elif args.network == "resnet50":
         cfg = cfg_re50
 
+    num_classes = 11
     use_batch_normalization = True
+    multiclass = num_classes > 2
 
     if use_batch_normalization:
         rgb_mean = (0, 0, 0)
     else:
         rgb_mean = (104, 117, 123) # bgr order
 
-    num_classes = 2
     img_dim = cfg['image_size']
     num_gpu = cfg['ngpu']
     batch_size = cfg['batch_size']
@@ -266,7 +309,7 @@ def train():
     cfg['pretrain'] = False
     max_epoch = 2048
 
-    model = UNetRetinaConcat(cfg=cfg, use_batch_normalization=use_batch_normalization)
+    model = UNetRetinaConcat(cfg=cfg, use_batch_normalization=use_batch_normalization, num_classes=num_classes)
     print("Printing net...")
     print(model)
 
@@ -308,7 +351,8 @@ def train():
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=16, threshold=1e-4,
                                                            factor=0.75, min_lr=1e-6, verbose=1)
 
-    criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 7, 0.35, False)
+    # criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 7, 0.35, False)
+    criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 1, 0.35, False)
     criterion_unet_j = JaccardLoss(mode='multiclass', from_logits=True, smooth=32)
     criterion_unet_b = torch.nn.CrossEntropyLoss()
 
@@ -317,7 +361,7 @@ def train():
         priors = priorbox.forward()
         priors = priors.to(device)
 
-    export_model = RetinaStaticExportWrapper(model, priors, export_config, bounding_box_from_points)
+    export_model = RetinaStaticExportWrapper(model, priors, export_config, bounding_box_from_points, return_mask=True)
     export_model.to(device)
 
     model.train()
@@ -325,14 +369,14 @@ def train():
     print('Loading Dataset...')
 
     dataset_train = _Dataset(df_train, preproc(img_dim, rgb_mean, use_mirror=False, pre_scales=[1.0],
-                                               transform=transform_train))
+                                               transform=transform_train), multiclass=multiclass)
 
     dataset_validation = _Dataset(df_validation, preproc(img_dim, rgb_mean, use_mirror=False, pre_scales=[1.0],
-                                                         transform=transform_validation))
+                                                         transform=transform_validation), multiclass=multiclass)
 
     dataloader_train = DataLoader(dataset_train, batch_size=32,
                                   num_workers=num_workers, collate_fn=detection_collate)
-    dataloader_validation = DataLoader(dataset_validation, batch_size=32,
+    dataloader_validation = DataLoader(dataset_validation, batch_size=32, shuffle=True,
                                        num_workers=1, collate_fn=detection_collate)
 
     epoch_size = math.ceil(len(dataset_train) / batch_size)
@@ -357,10 +401,10 @@ def train():
     summary_writer = SummaryWriter(summary_writer_path)
 
     _datetime = datetime.now().isoformat()
+    train_monitor = MetricMonitor('Train')
 
     for iteration in range(start_iter, max_iter):
         if iteration % epoch_size == 0:
-            train_monitor = MetricMonitor('Train')
 
             # create batch iterator
             batch_iterator = iter(data.DataLoader(dataset_train, batch_size, shuffle=True,
@@ -373,7 +417,14 @@ def train():
             for key, value in train_monitor.metrics.items():
                 summary_writer.add_scalar(f'{mode}-{key}', value['avg'], iteration)
 
+            train_monitor = MetricMonitor('Train')
+
+            export_model.eval()
+            model.eval()
+            export_model.model.phase = 'test'
             mAP, precision, recall, f1_score = validation_epoch(export_model, dataloader_validation, device)
+            export_model.model.phase = 'train'
+            export_model.train()
             model.train()
             torch.enable_grad(False)
 
@@ -416,9 +467,10 @@ def train():
         optimizer.zero_grad()
         loss_l, loss_c, loss_landm = criterion(out, priors, targets)
         # loss_j = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long()) + criterion_unet_j(mask_predicted[:, 1:, ...], torch.clamp(mask_true.long() - 1, 0, 1))
-        loss_j = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long()) + \
-            criterion_unet_j(mask_predicted, mask_true.long())
-        loss = cfg['loc_weight'] * loss_l + loss_c + loss_landm + loss_j
+        loss_j = criterion_unet_j(mask_predicted, mask_true.long())
+        loss_b = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long())
+
+        loss = cfg['loc_weight'] * loss_l + 10 * loss_c + loss_landm + 3 * (loss_j + loss_b)
         loss.backward()
         optimizer.step()
 
@@ -426,13 +478,14 @@ def train():
         train_monitor.update("Confidence", loss_c.item())
         train_monitor.update("Location", loss_l.item())
         train_monitor.update("Jacard", loss_j.item())
+        train_monitor.update("CCE", loss_b.item())
 
         if iteration % epoch_size == 0:
             item_count = 4
             # frame_data = np.transpose(images[0:item_count].detach().cpu().numpy(), (0, 2, 3, 1)) * 255 / (images.max() - images.min()).item()
             frame_data = (np.transpose(images[0:item_count].detach().cpu().numpy(), (0, 2, 3, 1)))
             mask_true_data = 255 * torch.nn.functional.one_hot(mask_true[0:item_count, 0].long().detach()).cpu().numpy()
-            mask_predicted_data = 255 * np.transpose(mask_predicted[0:item_count].detach().cpu().numpy(), (0, 2, 3, 1))
+            mask_predicted_data = 255 * np.transpose(torch.softmax(mask_predicted[0:item_count], dim=1).detach().cpu().numpy(), (0, 2, 3, 1))
 
             frame_show = np.vstack([np.hstack(frame_data), np.hstack(mask_true_data), np.hstack(mask_predicted_data)])
             cv2.imwrite(f'frame_show_{data_mode}.jpg', frame_show)

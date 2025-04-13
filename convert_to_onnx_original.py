@@ -63,7 +63,7 @@ def decode_torch(loc, priors, variances):
 
 
 class RetinaStaticExportWrapper(nn.Module):
-    def __init__(self, model, prior_box, config, bounding_box_from_points):
+    def __init__(self, model, prior_box, config, bounding_box_from_points, return_mask=False):
         super(RetinaStaticExportWrapper, self).__init__()
         self.model = model
         self.color_scheme = config.get('color_scheme', 'BGR')
@@ -86,6 +86,8 @@ class RetinaStaticExportWrapper(nn.Module):
             self.normalize = False
         else:
             self.normalize = True
+
+        self.return_mask = return_mask
 
         if self.normalize:
             self.mean = torch.tensor(self.mean)
@@ -114,7 +116,7 @@ class RetinaStaticExportWrapper(nn.Module):
         if self.bounding_box_from_points:
             _, conf, landms = self.model(x)
         else:
-            (loc, conf, landms), _ = self.model(x)
+            (loc, conf, landms), mask_predicted = self.model(x)
 
         size_b, size_c, size_y, size_x = x.size()
         size_p, size_o = prior_box.size()
@@ -131,10 +133,11 @@ class RetinaStaticExportWrapper(nn.Module):
             loc = loc.reshape((size_b, size_p) + (2, 2)) * coordinate_scale
             loc = loc.reshape(size_b, size_p, 4)
 
-        score = conf[..., 1]
-        confidence_select = score > self.confidence_threshold
+        max_value, max_index = conf.max(dim=-1, keepdims=False)
+        confidence_select = (max_value > self.confidence_threshold) * (max_index > 0)
         landms = landms[confidence_select]
-        score = score[confidence_select]
+        conf = conf[confidence_select]
+        score = max_value[confidence_select]
 
         if self.bounding_box_from_points:
             pass
@@ -145,6 +148,7 @@ class RetinaStaticExportWrapper(nn.Module):
         _, top_k_select = score.sort(descending=True)
         top_k_select = top_k_select[:self.top_k]
         landms = landms[top_k_select]
+        conf = conf[top_k_select]
         score = score[top_k_select]
 
         if self.bounding_box_from_points:
@@ -155,9 +159,13 @@ class RetinaStaticExportWrapper(nn.Module):
         nms_select = torchvision.ops.nms(loc, score, self.nms_threshold)
         loc = loc[nms_select]
         landms = landms[nms_select]
+        conf = conf[nms_select]
         score = score[nms_select]
 
-        return score, landms, loc
+        if self.return_mask:
+            return conf, landms, loc, torch.softmax(mask_predicted, dim=1)
+        else:
+            return score, landms, loc
 
 
 if __name__ == '__main__':

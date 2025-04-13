@@ -74,13 +74,14 @@ class GroupeDetectionDataset(CustomDetectionDataset):
 
 
 class GroupeAlignedDetectionDataset(GroupeDetectionDataset):
-    def __init__(self, dataframe, preprocess, transform=None):
+    def __init__(self, dataframe, preprocess, transform=None, multiclass=False):
         super().__init__(dataframe, preprocess, transform)
 
         self.transform = SimilarityTransform()
         self.s_dst = (512, 512)
         self.p_dst = np.array([[0.1, 0.25], [0.9, 0.25],
                                [0.9, 0.75], [0.1, 0.75]], dtype=np.float32) * np.array(self.s_dst)[None, ...]
+        self.multiclass = multiclass
 
     def __getitem__(self, idx):
         frame_path = self.file_list[idx]
@@ -97,8 +98,9 @@ class GroupeAlignedDetectionDataset(GroupeDetectionDataset):
 
         p_list_src = np.array(ast.literal_eval(rows['point'].iloc[0]), dtype=np.float32)
         p_list_dst = cv2.perspectiveTransform(p_list_src, M)
+        label_list = ast.literal_eval(rows.label_list.iloc[0])
 
-        for point in p_list_dst:
+        for label, point in zip(label_list, p_list_dst):
             annotation = np.full((1, 15), -1, dtype=np.float32)
 
             x1, y1 = point.min(0)
@@ -123,10 +125,15 @@ class GroupeAlignedDetectionDataset(GroupeDetectionDataset):
             annotation[0, 12] = point[3, 0]  # l4_x
             annotation[0, 13] = point[3, 1]  # l4_y
 
+            if self.multiclass:
+                label = 1 + label
+            else:
+                label = 1
+
             if (annotation[0, 4] < 0):
                 annotation[0, 14] = -1
             else:
-                annotation[0, 14] = 1
+                annotation[0, 14] = label
 
             annotations = np.append(annotations, annotation, axis=0)
 
