@@ -61,7 +61,7 @@ if __name__ == '__main__':
     cfg['pretrain'] = False
 
     # net and model
-    net = UNetRetinaConcat(cfg=cfg, phase='test')
+    net = UNetRetinaConcat(cfg=cfg, phase='test', use_batch_normalization=use_batch_normalization, num_classes=num_classes)
     net = load_model(net, trained_model, args.cpu)
     net.eval()
     print('Finished loading model!')
@@ -87,7 +87,13 @@ if __name__ == '__main__':
     export_config['confidence_threshold'] = 0.02
     export_config['top_k'] = 512
     export_config['color_scheme'] = 'BGR'
-    export_config['mean'] = (104, 117, 123)
+    
+    if use_batch_normalization:
+        rgb_mean = (0, 0, 0)
+    else:
+        rgb_mean = (104, 117, 123) # bgr order
+
+    export_config['mean'] = rgb_mean
 
     export_model = RetinaStaticExportWrapper(net, priors, export_config, bounding_box_from_points)
     export_model.eval()
@@ -108,7 +114,9 @@ if __name__ == '__main__':
 
     predict_onnx = model_onnx.run(None, {input_name: input_numpy})
 
-    for _score, _landm, _box in zip(*(item for item in predict_onnx)):
+    for __score, _landm, _box in zip(*(item for item in predict_onnx)):
+        _score = __score.max()
+
         if _score < vis_thres:
             continue
         text = "{:.4f}".format(_score)

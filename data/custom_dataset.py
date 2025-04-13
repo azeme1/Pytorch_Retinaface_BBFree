@@ -143,3 +143,10 @@ class GroupeAlignedDetectionDataset(GroupeDetectionDataset):
             frame_patch, mask_data, target = self.preprocess(frame_patch, target)
 
         return torch.from_numpy(frame_patch), mask_data, target
+
+
+class GroupeAlignedMulticlassDetectionDataset(GroupeAlignedDetectionDataset):
+    def __init__(self, dataframe, preprocess, transform=None, multiclass=False):
+        super().__init__(dataframe, preprocess, transform)
+        self.p_dst = np.array([[0.0, 0.0], [1.0, 0.0],
+                               [1.0, 1.0], [0.0, 1.0]], dtype=np.float32) * np.array(self.s_dst)[None, ...]

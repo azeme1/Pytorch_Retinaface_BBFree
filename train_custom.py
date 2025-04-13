@@ -13,7 +13,7 @@ import torch.utils.data as data
 from convert_to_onnx_original import RetinaStaticExportWrapper
 from data import cfg_mnet, cfg_re50
 from data import preproc_a as preproc
-from data.custom_dataset import CustomDetectionDataset, GroupeAlignedDetectionDataset, GroupeDetectionDataset
+from data.custom_dataset import CustomDetectionDataset, GroupeAlignedDetectionDataset, GroupeDetectionDataset, GroupeAlignedMulticlassDetectionDataset
 from layers.modules import MultiBoxLoss
 from layers.functions.prior_box import PriorBox
 import time
@@ -251,14 +251,9 @@ def train():
     elif args.network == "resnet50":
         cfg = cfg_re50
 
-    num_classes = 11
-    use_batch_normalization = True
-    multiclass = num_classes > 2
-
-    if use_batch_normalization:
-        rgb_mean = (0, 0, 0)
-    else:
-        rgb_mean = (104, 117, 123) # bgr order
+    # num_classes = 11
+    # use_batch_normalization = True
+    # multiclass = num_classes > 2
 
     img_dim = cfg['image_size']
     num_gpu = cfg['ngpu']
@@ -289,8 +284,10 @@ def train():
         A.OneOf([
             A.ToGray(p=1),
             A.ToSepia(p=1)], p=0.15),
-        A.Affine(scale=(0.9, 1.1), rotate=(-180, 180), translate_percent=(0.025, 0.025),
-                 border_mode=cv2.BORDER_REPLICATE, p=0.9),
+        A.OneOf([
+            A.Affine(scale=(0.9, 1.1), rotate=(-180, 180), translate_percent=(0.025, 0.025), border=cv2.BORDER_REPLICATE, p=1.),
+            A.Affine(scale=(0.9, 1.1), rotate=(-180, 180), translate_percent=(0.025, 0.025), border=cv2.BORDER_CONSTANT, cval=(0, 255), p=1.),
+            ], p=0.9),
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_labels']),
         keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, angle_in_degrees=False,
                                          check_each_transform=False))
@@ -303,7 +300,15 @@ def train():
 
 
     num_workers = multiprocessing.cpu_count()
-    num_workers = 1
+
+    use_batch_normalization = True
+    multiclass = num_classes > 2
+
+    if use_batch_normalization:
+        rgb_mean = (0, 0, 0)
+    else:
+        rgb_mean = (104, 117, 123) # bgr order
+
     save_folder = os.path.join(os.path.abspath(save_folder), '', data_mode)
 
     cfg['pretrain'] = False
@@ -429,7 +434,7 @@ def train():
             torch.enable_grad(False)
 
             if f1_score > f1_score_max:
-                _best_model_path = os.path.join(save_folder, '', f'{config_name}_epoch_{str(epoch)}_mAP{mAP:.5f}_F1_{f1_score:.5f}.pth')
+                _best_model_path = os.path.join(save_folder, '', f'{config_name}_epoch_{str(epoch).zfill(4)}_mAP{mAP:.5f}_F1_{f1_score:.5f}.pth')
                 os.makedirs(os.path.dirname(_best_model_path), exist_ok=True)
                 print(f'Best Model :: {_best_model_path}')
                 torch.save(model.state_dict(), _best_model_path)
@@ -470,7 +475,7 @@ def train():
         loss_j = criterion_unet_j(mask_predicted, mask_true.long())
         loss_b = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long())
 
-        loss = cfg['loc_weight'] * loss_l + 10 * loss_c + loss_landm + 3 * (loss_j + loss_b)
+        loss = cfg['loc_weight'] * loss_l + 10 * loss_c + loss_landm + weight_j * loss_j + weight_b * loss_b
         loss.backward()
         optimizer.step()
 

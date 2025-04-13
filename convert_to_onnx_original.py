@@ -165,7 +165,7 @@ class RetinaStaticExportWrapper(nn.Module):
         if self.return_mask:
             return conf, landms, loc, torch.softmax(mask_predicted, dim=1)
         else:
-            return score, landms, loc
+            return conf, landms, loc
 
 
 if __name__ == '__main__':
