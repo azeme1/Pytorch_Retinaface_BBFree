@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 class WiderFaceDetection(data.Dataset):
-    def __init__(self, txt_path, preproc=None):
+    def __init__(self, txt_path, preproc=None, relative_path=False):
         self.preproc = preproc
         self.imgs_path = []
         self.words = []
@@ -25,7 +25,8 @@ class WiderFaceDetection(data.Dataset):
                     self.words.append(labels_copy)
                     labels.clear()
                 path = line[2:]
-                path = txt_path.replace('label.txt','images/') + path
+                if relative_path:
+                    path = txt_path.replace('label.txt','images/') + path
                 self.imgs_path.append(path)
             else:
                 line = line.split(' ')

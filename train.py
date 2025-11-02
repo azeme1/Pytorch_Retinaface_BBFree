@@ -54,6 +54,7 @@ save_folder = args.save_folder
 net = RetinaFace(cfg=cfg)
 print("Printing net...")
 print(net)
+device = torch.device('mps')
 
 if args.resume_net is not None:
     print('Loading resume network...')
@@ -71,9 +72,9 @@ if args.resume_net is not None:
     net.load_state_dict(new_state_dict)
 
 if num_gpu > 1 and gpu_train:
-    net = torch.nn.DataParallel(net).cuda()
+    net = torch.nn.DataParallel(net).to(device)
 else:
-    net = net.cuda()
+    net = net.to(device)
 
 cudnn.benchmark = True
 
@@ -84,7 +85,7 @@ criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 7, 0.35, False)
 priorbox = PriorBox(cfg, image_size=(img_dim, img_dim))
 with torch.no_grad():
     priors = priorbox.forward()
-    priors = priors.cuda()
+    priors = priors.to(device)
 
 def train():
     net.train()
@@ -119,8 +120,8 @@ def train():
 
         # load train data
         images, targets = next(batch_iterator)
-        images = images.cuda()
-        targets = [anno.cuda() for anno in targets]
+        images = images.to(device)
+        targets = [anno.to(device) for anno in targets]
 
         # forward
         out = net(images)
@@ -137,6 +138,8 @@ def train():
         print('Epoch:{}/{} || Epochiter: {}/{} || Iter: {}/{} || Loc: {:.4f} Cla: {:.4f} Landm: {:.4f} || LR: {:.8f} || Batchtime: {:.4f} s || ETA: {}'
               .format(epoch, max_epoch, (iteration % epoch_size) + 1,
               epoch_size, iteration + 1, max_iter, loss_l.item(), loss_c.item(), loss_landm.item(), lr, batch_time, str(datetime.timedelta(seconds=eta))))
+
+        torch.save(net.state_dict(), save_folder + cfg['name'] + '_Staged.pth')
 
     torch.save(net.state_dict(), save_folder + cfg['name'] + '_Final.pth')
     # torch.save(net.state_dict(), save_folder + 'Final_Retinaface.pth')

@@ -44,9 +44,9 @@ if __name__ == '__main__':
         cfg = cfg_re50
         trained_model = './weights/Resnet50_Final.pth'
 
-    test_image_path = "./test_002.png"
-    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_epoch_12_mAP0.89158_F1_0.96458.pth"
-    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_2025-04-06T17:00:55.215359_Final.pth"
+    # test_image_path = "./test_002.png"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_epoch_12_mAP0.89158_F1_0.96458.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_2025-04-06T17:00:55.215359_Final.pth"
 
     deploy_path = os.path.dirname(trained_model)
     check_point_model_name = os.path.basename(trained_model)

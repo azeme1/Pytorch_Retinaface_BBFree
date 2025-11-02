@@ -10,6 +10,9 @@ from models.retinaface import RetinaFace
 import torch.nn as nn
 import torchvision
 import onnxruntime as rt
+# import ai_edge_torch
+import coremltools as ct
+from PIL import Image
 
 from utils.box_utils import bounding_box_from_points_torch
 
@@ -116,7 +119,8 @@ class RetinaStaticExportWrapper(nn.Module):
         if self.bounding_box_from_points:
             _, conf, landms = self.model(x)
         else:
-            (loc, conf, landms), mask_predicted = self.model(x)
+            (loc, conf, landms) = self.model(x)
+            # (loc, conf, landms), mask_predicted = self.model(x)
 
         size_b, size_c, size_y, size_x = x.size()
         size_p, size_o = prior_box.size()
@@ -133,11 +137,18 @@ class RetinaStaticExportWrapper(nn.Module):
             loc = loc.reshape((size_b, size_p) + (2, 2)) * coordinate_scale
             loc = loc.reshape(size_b, size_p, 4)
 
-        max_value, max_index = conf.max(dim=-1, keepdims=False)
-        confidence_select = (max_value > self.confidence_threshold) * (max_index > 0)
-        landms = landms[confidence_select]
-        conf = conf[confidence_select]
-        score = max_value[confidence_select]
+        if False:
+            max_value, max_index = conf.max(dim=-1, keepdims=False)
+            confidence_select = (max_value > self.confidence_threshold) * (max_index > 0)
+            landms = landms[confidence_select, :]
+            conf = conf[confidence_select, :]
+            score = max_value[confidence_select]
+        else:
+            _score = conf[..., -1]
+            confidence_select = _score > self.confidence_threshold
+            landms = landms[confidence_select, :]
+            conf = conf[confidence_select, :]
+            score = confidence_select[confidence_select]
 
         if self.bounding_box_from_points:
             pass
@@ -145,16 +156,16 @@ class RetinaStaticExportWrapper(nn.Module):
             loc = loc[confidence_select]
 
         # NOT supported in ONNX opset 11  torch.argsort(score, descending=True)[:self.top_k]
-        _, top_k_select = score.sort(descending=True)
-        top_k_select = top_k_select[:self.top_k]
-        landms = landms[top_k_select]
-        conf = conf[top_k_select]
-        score = score[top_k_select]
+        # _, top_k_select = score.sort(descending=True)
+        # top_k_select = top_k_select[:self.top_k]
+        # landms = landms[top_k_select]
+        # conf = conf[top_k_select]
+        # score = score[top_k_select]
 
         if self.bounding_box_from_points:
             loc = bounding_box_from_points_torch(landms, self.point_shape)
         else:
-            loc = loc[top_k_select]
+            loc = loc #[top_k_select]
 
         nms_select = torchvision.ops.nms(loc, score, self.nms_threshold)
         loc = loc[nms_select]
@@ -188,6 +199,7 @@ if __name__ == '__main__':
     vis_thres = args.vis_thres
     result_folder = args.result_folder
     bounding_box_from_points = args.bounding_box_from_points
+    bounding_box_from_points = False
     torch.set_grad_enabled(False)
     cfg = None
     if args.network == "mobile0.25":
@@ -206,7 +218,7 @@ if __name__ == '__main__':
     device = torch.device("cpu" if args.cpu else "cuda")
     net = net.to(device)
 
-    onnx_model_path = os.path.join(trained_model + '.onnx')
+    onnx_model_path = os.path.join(test_image_path, '', args.network + '.onnx')
 
     img_raw = cv2.imread(test_image_path)
     img_show = img_raw.copy()
@@ -224,25 +236,122 @@ if __name__ == '__main__':
     export_config['nms_threshold'] = 0.35
     export_config['confidence_threshold'] = 0.02
     export_config['top_k'] = 512
-    export_config['color_scheme'] = 'BGR'
-    export_config['mean'] = (104, 117, 123)
+    # export_config['color_scheme'] = 'BGR'
+    # export_config['mean'] = (104, 117, 123)
+    # flip = 1
+    export_config['color_scheme'] = 'RGB'
+    export_config['mean'] = (123, 104, 117)
+    flip = -1
 
     export_model = RetinaStaticExportWrapper(net, priors, export_config, bounding_box_from_points)
 
-    input_numpy = img_raw_in[None, ...]
+    input_numpy = np.ascontiguousarray(img_raw_in[None, ..., ::flip])
     input_torch = torch.from_numpy(input_numpy)
 
-    predict_wrapper = export_model(input_torch)
-    os.makedirs(os.path.dirname(onnx_model_path), exist_ok=True)
-    torch.onnx.export(export_model, input_torch, onnx_model_path, export_params=True, verbose=False,
-                      input_names=['input'], output_names=['output'], opset_version=11)
+    # predict_wrapper = export_model(input_torch)
+    # os.makedirs(os.path.dirname(onnx_model_path), exist_ok=True)
+    # torch.onnx.export(export_model, input_torch, onnx_model_path, export_params=True, verbose=False,
+    #                   input_names=['input'], output_names=['output'], opset_version=11)
 
-    model_onnx = sess = rt.InferenceSession(onnx_model_path, providers=['CPUExecutionProvider'])
-    input_name = sess.get_inputs()[0].name
+    # model_onnx = sess = rt.InferenceSession(onnx_model_path, providers=['CPUExecutionProvider'])
+    # input_name = sess.get_inputs()[0].name
 
-    predict_onnx = model_onnx.run(None, {input_name: input_numpy})
+    # predict_onnx = model_onnx.run(None, {input_name: input_numpy})
 
-    for _score, _landm, _box in zip(*(item for item in predict_onnx)):
+    if False:
+        mlmodel_fp32_path = "retina_mobilenet_facedetector.mlmodel"
+
+        trace_export_model_rgb = torch.jit.trace(export_model, input_torch)
+
+        mlmodel_fp32 = ct.convert(
+            trace_export_model_rgb,
+            inputs=[ct.ImageType(name="input", shape=input_numpy.shape, channel_first=False)],
+            outputs=[ct.TensorType(name="confidence"), ct.TensorType(name="landmarks"), ct.TensorType(name="box")],
+            convert_to='neuralnetwork'
+        )
+
+        mlmodel_fp32.save(mlmodel_fp32_path)
+
+        predict_onnx = mlmodel_fp32.predict({"input": Image.fromarray(img_raw_in[..., ::flip])})
+
+        score_list = predict_onnx["confidence"][:, 1]
+        landmarks_list = predict_onnx["landmarks"]
+        box_list = predict_onnx["box"]
+
+    elif False:
+        mlmodel_fp32_path = "retina_mobilenet_facedetector.tflite"
+
+        # Convert directly to TFLite
+        edge_model = ai_edge_torch.convert(export_model, example_inputs=[input_torch])
+
+        # Save the TFLite model
+        edge_model.export(mlmodel_fp32_path)
+
+        # Validate conversion
+        # Load TFLite model and run inference
+        interpreter = edge_model  # Can use directly or load from file
+
+        # Get input/output details
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+
+        # Prepare input
+        input_data = input_torch.numpy() #.astype(np.float32)
+        interpreter.set_input(0, input_data)
+
+        # Run inference
+        interpreter.invoke()
+
+        # Get output
+        tflite_output = interpreter.get_output(0)
+
+    else:
+        onnx_model_path = "retina_mobilenet_facedetector.onnx"
+
+        torch.onnx.export(export_model, input_torch, onnx_model_path, export_params=True, verbose=False,
+                          opset_version=17,
+                          input_names=['input'], output_names=['confidence', 'landmarks', 'box'])
+
+        model_onnx = sess = rt.InferenceSession(onnx_model_path, providers=['CPUExecutionProvider'])
+        input_name = sess.get_inputs()[0].name
+
+        predict_onnx = model_onnx.run(None, {input_name: input_numpy})
+
+        print()
+
+        # onnx_path = "temp_model.onnx"
+        # torch.onnx.export(
+        #     pytorch_model,
+        #     dummy_input,
+        #     onnx_path,
+        #     input_names=['input'],
+        #     output_names=['output'],
+        #     opset_version=11
+        # )
+
+        # # Step 2: ONNX to TensorFlow
+        # onnx_model = onnx.load(onnx_path)
+        # tf_rep = onnx_tf.backend.prepare(onnx_model)
+        # tf_model_path = "temp_tf_model"
+        # tf_rep.export_graph(tf_model_path)
+
+        # # Step 3: TensorFlow to TFLite
+        # converter = tf.lite.TFLiteConverter.from_saved_model(tf_model_path)
+
+        # # Optional optimizations
+        # converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        # # converter.target_spec.supported_types = [tf.float16]  # For FP16 quantization
+
+        # tflite_model = converter.convert()
+
+        # # Save TFLite model
+        # with open(tflite_path, 'wb') as f:
+        #     f.write(tflite_model)
+
+        # print(f"Model successfully converted to {tflite_path}")
+
+
+    for _score, _landm, _box in zip(score_list, landmarks_list, box_list):
         if _score < vis_thres:
             continue
         text = "{:.4f}".format(_score)

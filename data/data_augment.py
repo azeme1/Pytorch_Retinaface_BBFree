@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import random
 from utils.box_utils import matrix_iof
-import albumentations as A
+# import albumentations as A
 
 PRE_SCALES = [0.3, 0.45, 0.6, 0.8, 1.0]
 

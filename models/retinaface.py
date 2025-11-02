@@ -61,15 +61,17 @@ class RetinaFace(nn.Module):
             if cfg['pretrain']:
                 import os
                 _folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                checkpoint = torch.load(f"{_folder}/weights/mobilenetV1X0.25_pretrain.tar", 
-                                        map_location=torch.device('cpu'))
-                from collections import OrderedDict
-                new_state_dict = OrderedDict()
-                for k, v in checkpoint['state_dict'].items():
-                    name = k[7:]  # remove module.
-                    new_state_dict[name] = v
-                # load params
-                backbone.load_state_dict(new_state_dict)
+                checkpoint_path = f"{_folder}/weights/mobilenetV1X0.25_pretrain.tar"
+                if os.path.exists(checkpoint_path):
+                    checkpoint = torch.load(checkpoint_path, 
+                                            map_location=torch.device('cpu'))
+                    from collections import OrderedDict
+                    new_state_dict = OrderedDict()
+                    for k, v in checkpoint['state_dict'].items():
+                        name = k[7:]  # remove module.
+                        new_state_dict[name] = v
+                    # load params
+                    backbone.load_state_dict(new_state_dict)
         elif cfg['name'] == 'Resnet50':
             import torchvision.models as models
             backbone = models.resnet50(pretrained=cfg['pretrain'])

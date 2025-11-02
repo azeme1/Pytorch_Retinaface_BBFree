@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from utils.box_utils import bounding_box_from_points_torch
 from utils.box_utils import match, log_sum_exp
 from data import cfg_mnet
-GPU = cfg_mnet['gpu_train']
+DEVICE = cfg_mnet['gpu_train']
 
 
 class MultiBoxLoss(nn.Module):
@@ -77,11 +77,11 @@ class MultiBoxLoss(nn.Module):
             defaults = priors.data
             match(self.threshold, truths, defaults, self.variance, labels, landms, loc_t, conf_t, landm_t, idx)
 
-        loc_t = loc_t.to(device)
-        conf_t = conf_t.to(device)
-        landm_t = landm_t.to(device)
+        loc_t = loc_t.to(DEVICE)
+        conf_t = conf_t.to(DEVICE)
+        landm_t = landm_t.to(DEVICE)
 
-        zeros = torch.tensor(0).to(device)
+        zeros = torch.tensor(0).to(DEVICE)
         # landm Loss (Smooth L1)
         # Shape: [batch,num_priors,10]
         pos1 = conf_t > zeros
@@ -90,7 +90,10 @@ class MultiBoxLoss(nn.Module):
         pos_idx1 = pos1.unsqueeze(pos1.dim()).expand_as(landm_data)
         landm_p = landm_data[pos_idx1].view(-1, 10)
         landm_t = landm_t[pos_idx1].view(-1, 10)
-        loss_landm = F.smooth_l1_loss(landm_p, landm_t, reduction='sum')
+        if len(landm_p) > 0:
+            loss_landm = F.smooth_l1_loss(landm_p, landm_t, reduction='sum')
+        else:
+            loss_landm = torch.tensor(0.).to(DEVICE)
 
         pos = conf_t != zeros
         # conf_t[pos] = 1
