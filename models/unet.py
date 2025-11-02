@@ -1,13 +1,26 @@
+from functools import partial
 import torch
 
 
+class SeparableDepthwiseConv2d(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel=(3, 3), padding=(1, 1),
+                 padding_mode='reflect'):
+        super(SeparableDepthwiseConv2d, self).__init__()
+        self.depthwise = torch.nn.Conv2d(in_channels, in_channels, kernel_size=kernel,
+                                         padding=padding, padding_mode=padding_mode, groups=in_channels)
+        self.pointwise = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        out = self.depthwise(x)
+        out = self.pointwise(out)
+        return out
+
+
 class BasicBlock_X1(torch.nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel=(
-            3, 3), padding=(
-            1, 1), padding_mode='reflect'):
+    def __init__(self, in_channels, out_channels, kernel=(3, 3), padding=(1, 1),
+                 padding_mode='reflect', ConvCLS=torch.nn.Conv2d):
         super(BasicBlock_X1, self).__init__()
-        self.conv_00 = torch.nn.Conv2d(
+        self.conv_00 = ConvCLS(
             in_channels,
             out_channels,
             kernel,
@@ -26,12 +39,10 @@ class BasicBlock_X1(torch.nn.Module):
 
 
 class DownBlock_X1(torch.nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel=(
-            3, 3), padding=(
-            1, 1), padding_mode='reflect'):
+    def __init__(self, in_channels, out_channels, kernel=(3, 3), padding=(1, 1),
+                 padding_mode='reflect', ConvCLS=torch.nn.Conv2d):
         super(DownBlock_X1, self).__init__()
-        self.conv_00 = torch.nn.Conv2d(
+        self.conv_00 = ConvCLS(
             in_channels,
             out_channels,
             kernel,
@@ -54,12 +65,10 @@ class DownBlock_X1(torch.nn.Module):
 
 
 class UpBlock_X1(torch.nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel=(
-            3, 3), padding=(
-            1, 1), padding_mode='reflect'):
+    def __init__(self, in_channels, out_channels, kernel=(3, 3), padding=(1, 1),
+                 padding_mode='reflect', ConvCLS=torch.nn.Conv2d):
         super(UpBlock_X1, self).__init__()
-        self.conv_00 = torch.nn.Conv2d(
+        self.conv_00 = ConvCLS(
             in_channels,
             out_channels,
             kernel,
@@ -80,19 +89,17 @@ class UpBlock_X1(torch.nn.Module):
 
 
 class BasicBlock_X2(torch.nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel=(
-            3, 3), padding=(
-            1, 1), padding_mode='reflect'):
+    def __init__(self, in_channels, out_channels, kernel=(3, 3), padding=(1, 1),
+                 padding_mode='reflect', ConvCLS=torch.nn.Conv2d):
         super(BasicBlock_X2, self).__init__()
-        self.conv_00 = torch.nn.Conv2d(
+        self.conv_00 = ConvCLS(
             in_channels,
             out_channels,
             kernel,
             padding=padding,
             padding_mode=padding_mode)
         self.bn_00 = torch.nn.BatchNorm2d(out_channels)
-        self.conv_01 = torch.nn.Conv2d(
+        self.conv_01 = ConvCLS(
             out_channels,
             out_channels,
             kernel,
@@ -112,19 +119,17 @@ class BasicBlock_X2(torch.nn.Module):
 
 
 class DownBlock_X2(torch.nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel=(
-            3, 3), padding=(
-            1, 1), padding_mode='reflect'):
+    def __init__(self, in_channels, out_channels, kernel=(3, 3), padding=(1, 1),
+                 padding_mode='reflect', ConvCLS=torch.nn.Conv2d):
         super(DownBlock_X2, self).__init__()
-        self.conv_00 = torch.nn.Conv2d(
+        self.conv_00 = ConvCLS(
             in_channels,
             out_channels,
             kernel,
             padding=padding,
             padding_mode=padding_mode)
         self.bn_00 = torch.nn.BatchNorm2d(out_channels, momentum=0.01)
-        self.conv_01 = torch.nn.Conv2d(
+        self.conv_01 = ConvCLS(
             out_channels,
             out_channels,
             kernel,
@@ -148,19 +153,17 @@ class DownBlock_X2(torch.nn.Module):
 
 
 class UpBlock_X2(torch.torch.nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel=(
-            3, 3), padding=(
-            1, 1), padding_mode='reflect'):
+    def __init__(self, in_channels, out_channels, kernel=(3, 3), padding=(1, 1),
+                 padding_mode='reflect', ConvCLS=torch.nn.Conv2d):
         super(UpBlock_X2, self).__init__()
-        self.conv_00 = torch.nn.Conv2d(
+        self.conv_00 = ConvCLS(
             in_channels,
             out_channels,
             kernel,
             padding=padding,
             padding_mode=padding_mode)
         self.bn_00 = torch.nn.BatchNorm2d(out_channels, momentum=0.01)
-        self.conv_01 = torch.nn.Conv2d(
+        self.conv_01 = ConvCLS(
             out_channels,
             out_channels,
             kernel,
@@ -181,14 +184,14 @@ class UpBlock_X2(torch.torch.nn.Module):
         return x
 
 
-class UNet_X1(torch.torch.nn.Module):
+class UNet_X2(torch.torch.nn.Module):
     def __init__(
             self,
             in_channel,
             out_channes,
             output_activation=None,
             use_batch_norm=False):
-        super(UNet_X1, self).__init__()
+        super(UNet_X2, self).__init__()
 
         self.use_batch_norm = use_batch_norm
 
@@ -216,14 +219,6 @@ class UNet_X1(torch.torch.nn.Module):
         self.conv_last = torch.torch.nn.Conv2d(uc_00, out_channes, (3, 3), padding=1)
         self.output_activation = output_activation
 
-        self.conv_c_00 = torch.torch.nn.Conv2d(dc_05, dc_05 // 8, (8, 8), padding=0)
-        self.conv_c_01 = torch.torch.nn.Conv2d(dc_05 // 8, 1, (1, 1), padding=0)
-
-        self.conv_d_00 = torch.torch.nn.Conv2d(dc_05, dc_05 // 2, (8, 8), padding=0)
-        self.conv_d_01 = torch.torch.nn.Conv2d(dc_05 // 2, dc_05 // 4, (1, 1), padding=0)
-        self.conv_d_02 = torch.torch.nn.Conv2d(dc_05 // 4, dc_05 // 8, (1, 1), padding=0)
-        self.conv_d_03 = torch.torch.nn.Conv2d(dc_05 // 8, 4, (1, 1), padding=0)
-
     def get_basic_blocks(self):
         return DownBlock_X2, BasicBlock_X2, UpBlock_X2
 
@@ -237,11 +232,17 @@ class UNet_X1(torch.torch.nn.Module):
         if self.use_batch_norm:
             x = self.bn_first(x)
         x, x_00 = self.d_00(x)
+        x_00 = torch.nn.functional.dropout(x_00, 0.1)
         x, x_01 = self.d_01(x)
+        x_01 = torch.nn.functional.dropout(x_01, 0.1)
         x, x_02 = self.d_02(x)
+        x_02 = torch.nn.functional.dropout(x_02, 0.1)
         x, x_03 = self.d_03(x)
+        x_03 = torch.nn.functional.dropout(x_03, 0.1)
         x, x_04 = self.d_04(x)
+        x_04 = torch.nn.functional.dropout(x_04, 0.1)
         x, x_05 = self.d_05(x)  # 8x8
+        x_05 = torch.nn.functional.dropout(x_05, 0.1)
 
         x = self.up_05(x)
         x = torch.cat([x, x_05], dim=1)
@@ -263,3 +264,17 @@ class UNet_X1(torch.torch.nn.Module):
             x = self.output_activation(x)
 
         return x
+
+
+class UNetL_X2(UNet_X2):
+    def get_basic_weights(self):
+        d_list = [16, 32, 64, 128, 256, 512]
+        u_list = [512, 256, 128, 64, 32, 16]
+        return d_list, u_list
+
+
+class UNetL_SX2(UNetL_X2):
+    def get_basic_blocks(self):
+        return partial(DownBlock_X2, ConvCLS=SeparableDepthwiseConv2d), \
+               partial(BasicBlock_X2, ConvCLS=SeparableDepthwiseConv2d), \
+               partial(UpBlock_X2, ConvCLS=SeparableDepthwiseConv2d)

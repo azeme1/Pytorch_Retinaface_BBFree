@@ -9,7 +9,7 @@ from collections import OrderedDict
 from models.net import MobileNetV1 as MobileNetV1
 from models.net import FPN as FPN
 from models.net import SSH as SSH
-from models.unet import UNet_X1
+from models.unet import UNet_X2, UNetL_SX2, UNetL_X2
 
 
 
@@ -122,7 +122,7 @@ class RetinaFace(nn.Module):
         features = [feature1, feature2, feature3]
 
         bbox_regressions = torch.cat([self.BboxHead[i](feature) for i, feature in enumerate(features)], dim=1)
-        classifications = torch.cat([self.ClassHead[i](feature) for i, feature in enumerate(features)],dim=1)
+        classifications = torch.cat([self.ClassHead[i](feature) for i, feature in enumerate(features)], dim=1)
         ldm_regressions = torch.cat([self.LandmarkHead[i](feature) for i, feature in enumerate(features)], dim=1)
 
         if self.phase == 'train':
@@ -135,7 +135,7 @@ class RetinaFace(nn.Module):
 class UNetRetina(RetinaFace):
     def __init__(self, cfg=None, phase='train', num_classes=2):
         super().__init__(cfg, phase)
-        self.unet = UNet_X1(3, 1)
+        self.unet = UNet_X2(3, 1)
         self.dropout2d = torch.nn.Dropout2d(p=0.5)
 
     def forward(self, x):
@@ -152,9 +152,11 @@ class ClassHeadMultiClass(nn.Module):
         self.num_classes = num_classes
         self.conv1x1 = nn.Conv2d(inchannels, self.num_anchors * self.num_classes,
                                  kernel_size=(1, 1), stride=1, padding=0)
+        self.batch_norm = nn.BatchNorm2d(self.num_anchors * self.num_classes, momentum=0.01)
 
     def forward(self, x):
         out = self.conv1x1(x)
+        out = self.batch_norm(out)
         out = out.permute(0, 2, 3, 1).contiguous()
 
         return out.view(out.shape[0], -1, self.num_classes)
@@ -165,9 +167,11 @@ class UNetRetinaConcat(RetinaFace):
         self.use_batch_normalization = use_batch_normalization
         self.num_classes = num_classes
         super().__init__(cfg, phase)
-        self.unet = UNet_X1(3, 3)
+        # self.unet = UNet_X2(3, 3)
+        # self.unet = UNetL_X2(3, 3)
+        self.unet = UNetL_SX2(3, 3)
         self.body.stage1[0][0] = torch.nn.Conv2d(6, 8, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
-        self.dropout2d = torch.nn.Dropout2d(p=0.05)
+        self.dropout2d = torch.nn.Dropout2d(p=0.2)
         self.batch_normalization = torch.nn.BatchNorm2d(3, momentum=0.01)
 
     def forward(self, x):

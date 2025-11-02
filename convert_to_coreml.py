@@ -45,9 +45,37 @@ if __name__ == '__main__':
         trained_model = './weights/Resnet50_Final.pth'
 
     test_image_path = "./test_002.png"
+    test_image_path = "./usa-1-4-dollar-1937.jpg"
     trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_epoch_12_mAP0.89158_F1_0.96458.pth"
-    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_2025-04-06T17:00:55.215359_Final.pth"
+    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned_baseline/mobilenet0.25_2025-04-06T17:00:55.215359_Final.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_epoch_38_mAP0.89796_F1_0.95604.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_2025-04-10T18:29:25.319636_Final.pth"
 
+    # Model Digit
+    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned_BEST_MULTICLASS/mobilenet0.25_2025-04-13T02:20:19.188001_Final.pth"
+    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_2025-04-19T10:28:52.454463_Final.pth"
+    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned-2025_22_05_16/mobilenet0.25_epoch_0066_mAP0.97520_F1_0.99217.pth"
+    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned-2025_23_05_10/mobilenet0.25_epoch_0041_mAP0.97222_F1_0.99140.pth"
+    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned-2025_25_05_13/mobilenet0.25_2025-05-25T13:20:14.053349_Final.pth"
+    trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned-2025_26_05_09/mobilenet0.25_epoch_0102_mAP0.92810_F1_0.97656.pth"
+    num_classes = 11
+    use_batch_normalization = True
+
+    # # Model Year
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_multiclass/mobilenet0.25_epoch_455_mAP0.92617_F1_0.94099.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_multiclass_UNetL_SX2/mobilenet0.25_epoch_1456_mAP0.73810_F1_0.81748.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_multiclass/mobilenet0.25_epoch_0385_mAP0.94267_F1_0.96002.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_multiclass-2025_23_05_21/mobilenet0.25_2025-05-23T21:05:02.217993_Final.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_multiclass-2025_24_05_22/mobilenet0.25_2025-05-24T22:44:30.407434_Final.pth"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_multiclass-2025_27_05_19/mobilenet0.25_epoch_0088_mAP0.93624_F1_0.95288.pth"
+    # num_classes = 4
+    # use_batch_normalization = True
+
+    # test_image_path = "./5297-original.jpg"
+    # trained_model = "/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe/mobilenet0.25_epoch_35_mAP0.92347_F1_0.94949.pth"
+
+    test_image_path = "./1989-memorial-o.jpeg"
+    test_image_path = "./5297-original.jpg"
     deploy_path = os.path.dirname(trained_model)
     check_point_model_name = os.path.basename(trained_model)
     model_onnx_path = f'{deploy_path}/{check_point_model_name}.onnx'

@@ -15,7 +15,9 @@ import time
 
 parser = argparse.ArgumentParser(description='Retinaface')
 
-parser.add_argument('-m', '--trained_model', default='./weights/groupe/mobilenet0.25_epoch_35_mAP0.92347_F1_0.94949.pth',
+parser.add_argument('-m', '--trained_model', 
+                    default='./weights/groupe/mobilenet0.25_epoch_35_mAP0.92347_F1_0.94949.pth',
+                    # default="/home/ubuntu/projects/work/Pytorch_Retinaface_BBFree/weights/groupe_aligned/mobilenet0.25_2025-04-10T18:29:25.319636_Final.pth",
                     type=str, help='Trained state_dict file path to open')
 parser.add_argument('--network', default='mobile0.25', help='Backbone network mobile0.25 or resnet50')
 parser.add_argument('--cpu', action="store_true", default=False, help='Use cpu inference')

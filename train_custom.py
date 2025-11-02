@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 import math
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 import cv2
 import albumentations as A
 
@@ -28,6 +29,10 @@ from models.retinaface import UNetRetinaConcat
 # from models.retinaface import RetinaFace
 from segmentation_models_pytorch.losses.jaccard import JaccardLoss
 
+DATA_MODE = 'single'
+DATA_MODE = 'groupe'
+DATA_MODE = 'groupe_aligned'
+# DATA_MODE = 'groupe_multiclass'
 
 class MetricMonitor:
     def __init__(self, name, float_precision=3):
@@ -64,20 +69,22 @@ def detection_collate(batch):
             1) (tensor) batch of images stacked on their 0 dim
             2) (list of tensors) annotations for a given image are stacked on 0 dim
     """
+    idx_list = []
     targets = []
     frame_list = []
     mask_list = []
     for _, sample in enumerate(batch):
-        frame_data, mask_data, target_data = sample
+        frame_data, mask_data, target_data, idx = sample
         frame_list.append(frame_data)
         targets.append(torch.from_numpy(target_data))
         mask_list.append(torch.from_numpy(mask_data))
+        idx_list.append(idx)
 
         # import cv2
         # a = np.clip(np.transpose(128 + frame_data.cpu().detach().numpy(), (1, 2, 0)), 0, 256).astype(np.uint8)
         # print(target_data.shape)
 
-    return torch.stack(frame_list, 0), torch.stack(mask_list, 0), targets
+    return torch.stack(frame_list, 0).contiguous(), torch.stack(mask_list, 0).contiguous(), targets, idx_list
 
 
 # Function to compute mAP
@@ -165,9 +172,10 @@ def validation_epoch(model, dataloader, device, visualiation_count=4):
 
     annotations = []
     detections = []
-    for item_batch in dataloader:
+
+    for item_batch in tqdm(dataloader, total=len(dataloader)):
         for item in zip(*tuple(item_batch)):
-            frame_data, mask_ground_truth, ground_truth = item
+            frame_data, mask_ground_truth, ground_truth, _idx = item
             ground_truth[:, :-1] = (ground_truth[:, :-1].reshape(ground_truth.shape[0], -1, 2) * \
                                     torch.tensor(frame_data.shape[1:][::-1])).reshape(ground_truth[:, :-1].shape)
             output = model(torch.permute(frame_data[None, ...], (0, 2, 3, 1)).to(device))
@@ -180,6 +188,10 @@ def validation_epoch(model, dataloader, device, visualiation_count=4):
                 frame_data = torch.permute(frame_data, (1, 2, 0)).contiguous().detach().byte().cpu().numpy()
                 mask_ground_truth = (255 * torch.nn.functional.one_hot(mask_ground_truth.long()))[0].detach().cpu().numpy()
                 mask_predicted = (255 * np.transpose(mask_predicted, (0, 2, 3, 1))[0]).astype(np.uint8)
+
+                text = f"{_idx}"
+                cv2.putText(frame_data, text, (40, 40),
+                            cv2.FONT_HERSHEY_DUPLEX, 1.25, (128, 128, 128), thickness=2)
 
                 for confidence, box, landmark in zip(confidence_list, bbox_lsit, landmark_list):
                     label_index = int(confidence.argmax().item())
@@ -213,7 +225,7 @@ def validation_epoch(model, dataloader, device, visualiation_count=4):
                 visualiation_frame_show_list.append(frame_show)
 
     frame_show = np.hstack(visualiation_frame_show_list)
-    cv2.imwrite('frame_show_validation.jpg', frame_show)
+    cv2.imwrite(F'frame_show_validation_{DATA_MODE}.jpg', frame_show)
 
     # Calculate mAP
     mAP = compute_map(detections, annotations)
@@ -237,7 +249,7 @@ def train():
     parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
     parser.add_argument('--resume_net', default=None, help='resume net for retraining')
     parser.add_argument('--resume_epoch', default=0, type=int, help='resume iter for retraining')
-    parser.add_argument('--weight_decay', default=5e-4, type=float, help='Weight decay for SGD')
+    parser.add_argument('--weight_decay', default=5e-3, type=float, help='Weight decay for SGD')
     parser.add_argument('--gamma', default=0.1, type=float, help='Gamma update for SGD')
     parser.add_argument('--save_folder', default='./weights/', help='Location to save checkpoint models')
 
@@ -261,7 +273,7 @@ def train():
     max_epoch = cfg['epoch']
     gpu_train = cfg['gpu_train']
 
-    batch_size = 8
+    batch_size = 10
 
     num_workers = args.num_workers
     momentum = args.momentum
@@ -271,32 +283,109 @@ def train():
     df_train = args.training_dataset
     save_folder = args.save_folder
 
+
+    if DATA_MODE == 'single':
+        1 / 0
+        df_train = pd.read_csv("/home/ubuntu/projects/dataset/cvat/dataframe_digit_2025.03.10.csv.zip")
+        df_validation = pd.read_csv("/home/ubuntu/projects/dataset/cvat_year/dataframe_digit_2025.03.10.csv.zip")
+        _Dataset = CustomDetectionDataset
+    elif DATA_MODE == 'groupe':
+        1 / 0
+        df_train = pd.read_csv("/home/ubuntu/projects/dataset/cvat/dataframe_year_digit_2025.02.15_fix.csv.zip")
+        df_validation = pd.read_csv("/home/ubuntu/projects/dataset/cvat_year/dataframe_year_digit_2025_fix.03.10.csv.zip")
+        _Dataset = GroupeDetectionDataset
+    elif DATA_MODE == 'groupe_multiclass':
+        _min_scale = 0.85
+        _angle_range = (-180, +180)
+
+        # num_classes = 1 + 3   # backgroud - 0, d4 - 1, d2 - 2, d1 - 3
+        # df_train = pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_train_2025.04.12.csv.zip")
+        # df_validation = pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_test_2025.04.12.csv.zip")
+        # _Dataset = GroupeAlignedMulticlassDetectionDataset
+
+        num_classes = 1 + 3   # backgroud - 0, d4 - 1, d2 - 2, d1 - 3
+        df_train = pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_auto_detect_train_collect.csv.zip")
+        df_train["label_list"] = df_train["label_list_box"]
+        df_train["point"] = df_train["box"]
+        # df_train.drop(columns=["groupe"], inplace=True)
+
+        # df_validation = pd.concat([pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_train_2025.04.12.csv.zip"),
+        #                            pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_test_2025.04.12.csv.zip")])
+        df_validation = pd.concat([pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_train_2025.05.21.csv.zip"),
+                                   pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_validation_2025.05.21.csv.zip"),
+                                   pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_test_2025.05.21.csv.zip")])
+
+        # df_path_train = "/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_train_2025.05.21.csv.zip"
+        # df_path_validation = "/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_validation_2025.05.21.csv.zip"
+        # df_path_test = "/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_test_2025.05.21.csv.zip"
+
+        # df_validation = pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_region_detect_test_2025.04.12.csv.zip")
+        _Dataset = GroupeAlignedMulticlassDetectionDataset
+
+        weight_j = 50
+        weight_b = 10
+
+    elif DATA_MODE == "groupe_aligned":
+        _min_scale = 0.9
+        _angle_range = (-45, +45)
+
+        num_classes = 11
+        weight_j = 10
+        weight_b = 10
+
+        df_train = pd.read_csv("/home/ubuntu/projects/dataset/__ucoin_dataset_cache/df_year_auto_detect_train_collect.csv.zip")
+        df_train["label_list"] = df_train["label_list_point"]
+        df_train["groupe"] = df_train["box"]
+
+        df_validation = pd.concat([pd.read_csv("/home/ubuntu/projects/dataset/cvat/dataframe_year_digit_2025.02.15_fix.csv.zip"),
+                                   pd.read_csv("/home/ubuntu/projects/dataset/cvat_year/dataframe_year_digit_2025.03.10_fix.csv.zip")])
+        _Dataset = GroupeAlignedDetectionDataset
+
+    values, counts = np.unique(df_train.tid, return_counts=True)
+    weight_mapping = {k: 1. / (v + 1.) for k, v in zip(values, counts)}
+    weights = [weight_mapping[i] for i in df_train.tid]
+    df_train = df_train.assign(weights=weights)
+
     transform_train = A.Compose([
+        A.OneOf([
+            A.ImageCompression(compression_type='jpeg', quality_range=(50, 100), p=1.),
+            A.ImageCompression(compression_type='webp', quality_range=(50, 100), p=1.),
+        ], p=0.15),
         A.OneOf([
             A.Blur(blur_limit=3, p=1),
             A.MedianBlur(p=1),
-            A.GridDistortion(p=1)], p=0.15),
+            A.GridDistortion(p=1)
+            ], p=0.15),
+        A.CoarseDropout(min_holes=1, max_holes=8, max_height=32, max_width=32, p=0.25),
         A.OneOf([
             A.HueSaturationValue(p=1),
             A.RandomBrightnessContrast(p=1),
             A.RandomGamma(gamma_limit=(20, 180), p=1),
-            A.ColorJitter(p=1)], p=1.),
+            A.ColorJitter(p=1)
+            ], p=1.),
         A.OneOf([
             A.ToGray(p=1),
-            A.ToSepia(p=1)], p=0.15),
+            A.ToSepia(p=1)
+            ], p=0.15),
         A.OneOf([
-            A.Affine(scale=(0.9, 1.1), rotate=(-180, 180), translate_percent=(0.025, 0.025), border=cv2.BORDER_REPLICATE, p=1.),
-            A.Affine(scale=(0.9, 1.1), rotate=(-180, 180), translate_percent=(0.025, 0.025), border=cv2.BORDER_CONSTANT, cval=(0, 255), p=1.),
+            A.Affine(scale=(_min_scale, 1.0), rotate=_angle_range, translate_percent=(0.005, 0.005), mode=cv2.BORDER_REPLICATE, p=1.),
+            A.Affine(scale=(_min_scale, 1.0), rotate=_angle_range, translate_percent=(0.005, 0.005), mode=cv2.BORDER_CONSTANT, cval=(0, 255), p=1.),
             ], p=0.9),
-        ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_labels']),
+        A.Compose([
+            A.OneOf([
+                A.Resize(128, 128, p=1),
+                A.Resize(196, 196, p=1),
+                A.Resize(256, 256, p=1),
+                A.Resize(384, 384, p=1),
+                A.Resize(512, 512, p=1)], p=1),
+            A.Resize(640, 640, p=1),
+            ], p=0.25),
+        ],
+        bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_labels']),
         keypoint_params=A.KeypointParams(format='xy', remove_invisible=False, angle_in_degrees=False,
                                          check_each_transform=False))
 
     transform_validation = None
-
-    data_mode = 'single'
-    data_mode = 'groupe'
-    data_mode = 'groupe_aligned'
 
 
     num_workers = multiprocessing.cpu_count()
@@ -309,7 +398,7 @@ def train():
     else:
         rgb_mean = (104, 117, 123) # bgr order
 
-    save_folder = os.path.join(os.path.abspath(save_folder), '', data_mode)
+    save_folder = os.path.join(os.path.abspath(save_folder), '', DATA_MODE + datetime.now().strftime("-%Y_%d_%m_%H"))
 
     cfg['pretrain'] = False
     max_epoch = 2048
@@ -352,9 +441,10 @@ def train():
 
     cudnn.benchmark = True
 
-    optimizer = optim.SGD(model.parameters(), lr=initial_lr, momentum=momentum, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=16, threshold=1e-4,
-                                                           factor=0.75, min_lr=1e-6, verbose=1)
+    # optimizer = optim.SGD(model.parameters(), lr=initial_lr, momentum=momentum, weight_decay=weight_decay)
+    optimizer = optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=12, threshold=1e-4,
+                                                           factor=0.5, min_lr=1e-6, verbose=1)
 
     # criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 7, 0.35, False)
     criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 1, 0.35, False)
@@ -374,17 +464,19 @@ def train():
     print('Loading Dataset...')
 
     dataset_train = _Dataset(df_train, preproc(img_dim, rgb_mean, use_mirror=False, pre_scales=[1.0],
-                                               transform=transform_train), multiclass=multiclass)
+                                               transform=transform_train), multiclass=multiclass, check=True, train=True)
 
     dataset_validation = _Dataset(df_validation, preproc(img_dim, rgb_mean, use_mirror=False, pre_scales=[1.0],
-                                                         transform=transform_validation), multiclass=multiclass)
+                                                         transform=transform_validation), multiclass=multiclass, train=False)
 
-    dataloader_train = DataLoader(dataset_train, batch_size=32,
-                                  num_workers=num_workers, collate_fn=detection_collate)
-    dataloader_validation = DataLoader(dataset_validation, batch_size=32, shuffle=True,
-                                       num_workers=1, collate_fn=detection_collate)
+    # dataloader_train = DataLoader(dataset_train, batch_size=32,
+    #                               num_workers=num_workers, collate_fn=detection_collate)
+    dataloader_validation = DataLoader(dataset_validation, batch_size=batch_size, shuffle=True,
+                                       num_workers=num_workers, collate_fn=detection_collate)
 
     epoch_size = math.ceil(len(dataset_train) / batch_size)
+    epoch_size = 1024
+
     max_iter = max_epoch * epoch_size
 
     stepvalues = (cfg['decay1'] * epoch_size, cfg['decay2'] * epoch_size)
@@ -402,7 +494,7 @@ def train():
 
     f1_score_max = -np.inf
     mode = 'Train'
-    summary_writer_path = f'/home/ubuntu/projects/results/logs/detection-{data_mode}-{config_name}/{datetime.now().isoformat()}'
+    summary_writer_path = f'/home/ubuntu/projects/results/logs/detection-{DATA_MODE}-{config_name}/{datetime.now().isoformat()}'
     summary_writer = SummaryWriter(summary_writer_path)
 
     _datetime = datetime.now().isoformat()
@@ -412,11 +504,16 @@ def train():
         if iteration % epoch_size == 0:
 
             # create batch iterator
-            batch_iterator = iter(data.DataLoader(dataset_train, batch_size, shuffle=True,
+            sampler = torch.utils.data.WeightedRandomSampler(dataset_train.dataframe.weights, len(df_train), replacement=True)
+            batch_iterator = iter(data.DataLoader(dataset_train, batch_size, sampler=sampler,
                                                   num_workers=num_workers, collate_fn=detection_collate))
             # if (epoch % 10 == 0 and epoch > 0) or (epoch % 5 == 0 and epoch > cfg['decay1']):
             #     torch.save(model.state_dict(), save_folder + '_epoch_' + str(epoch) + '.pth')
             epoch += 1
+
+            next(batch_iterator)
+            next(batch_iterator)
+            next(batch_iterator)
 
             mode = 'Train'
             for key, value in train_monitor.metrics.items():
@@ -460,7 +557,7 @@ def train():
         # lr = adjust_learning_rate(initial_lr, optimizer, gamma, epoch, step_index, iteration, epoch_size)
 
         # load train data
-        images, mask_true, targets = next(batch_iterator)
+        images, mask_true, targets, idx_list = next(batch_iterator)
         images = images.to(device)
         mask_true = mask_true.to(device)
         targets = [anno.to(device) for anno in targets]
@@ -470,7 +567,11 @@ def train():
 
         # backprop
         optimizer.zero_grad()
-        loss_l, loss_c, loss_landm = criterion(out, priors, targets)
+        try:
+            loss_l, loss_c, loss_landm = criterion(out, priors, targets)
+        except Exception as e:
+            print(str(e))
+            continue
         # loss_j = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long()) + criterion_unet_j(mask_predicted[:, 1:, ...], torch.clamp(mask_true.long() - 1, 0, 1))
         loss_j = criterion_unet_j(mask_predicted, mask_true.long())
         loss_b = criterion_unet_b(mask_predicted, mask_true[:, 0, ...].long())
@@ -492,8 +593,11 @@ def train():
             mask_true_data = 255 * torch.nn.functional.one_hot(mask_true[0:item_count, 0].long().detach()).cpu().numpy()
             mask_predicted_data = 255 * np.transpose(torch.softmax(mask_predicted[0:item_count], dim=1).detach().cpu().numpy(), (0, 2, 3, 1))
 
+            frame_data = [cv2.putText(np.ascontiguousarray(frame_item), f"{_idx}", (40, 40), cv2.FONT_HERSHEY_DUPLEX, 1.25, (128, 128, 128), thickness=2)
+                          for _idx, frame_item in zip(idx_list, frame_data.astype(np.uint8))]
+
             frame_show = np.vstack([np.hstack(frame_data), np.hstack(mask_true_data), np.hstack(mask_predicted_data)])
-            cv2.imwrite(f'frame_show_{data_mode}.jpg', frame_show)
+            cv2.imwrite(f'frame_show_{DATA_MODE}.jpg', frame_show)
 
         load_t1 = time.time()
         batch_time = load_t1 - load_t0

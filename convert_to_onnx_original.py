@@ -168,6 +168,16 @@ class RetinaStaticExportWrapper(nn.Module):
             return conf, landms, loc
 
 
+class RetinaStaticExportWrapperV2(RetinaStaticExportWrapper):
+    def __init__(self, model, config, bounding_box_from_points, return_mask=False):
+        img_dim = config['image_size']
+        priorbox = PriorBox(config, image_size=(img_dim, img_dim))
+        with torch.no_grad():
+            priors = priorbox.forward()
+            priors = priors
+        super(RetinaStaticExportWrapperV2, self).__init__(model, priors, config, bounding_box_from_points, return_mask)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Test')
     parser.add_argument('--network', default='mobile0.25', help='Backbone network mobile0.25 or resnet50')
